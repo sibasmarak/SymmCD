@@ -1,6 +1,5 @@
 """This module is adapted from https://github.com/Open-Catalyst-Project/ocp/tree/master/ocpmodels/models
 """
-
 import torch
 import torch.nn as nn
 from torch_scatter import scatter
