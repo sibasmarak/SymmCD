@@ -21,7 +21,11 @@ from diffcsp.common.utils import log_hyperparameters, PROJECT_ROOT
 
 import wandb
 
-
+# NOTE: received this warning
+# You are using a CUDA device ('NVIDIA A100-SXM4-80GB') that has Tensor Cores. 
+# To properly utilize them, you should set `torch.set_float32_matmul_precision('medium' | 'high')` which will trade-off precision for performance. 
+# For more details, read https://pytorch.org/docs/stable/generated/torch.set_float32_matmul_precision.html#torch.set_float32_matmul_precision
+torch.set_float32_matmul_precision('high')
 
 def build_callbacks(cfg: DictConfig) -> List[Callback]:
     callbacks: List[Callback] = []
@@ -151,15 +155,15 @@ def run(cfg: DictConfig) -> None:
         callbacks=callbacks,
         deterministic=cfg.train.deterministic,
         check_val_every_n_epoch=cfg.logging.val_check_interval,
-        progress_bar_refresh_rate=cfg.logging.progress_bar_refresh_rate,
-        resume_from_checkpoint=ckpt,
+        # progress_bar_refresh_rate=cfg.logging.progress_bar_refresh_rate, #NOTE: No longer viable in new PyTorch Lightning version
+        # resume_from_checkpoint=ckpt,#NOTE: No longer viable in new PyTorch Lightning version
         **cfg.train.pl_trainer,
     )
 
     log_hyperparameters(trainer=trainer, model=model, cfg=cfg)
 
     hydra.utils.log.info("Starting training!")
-    trainer.fit(model=model, datamodule=datamodule)
+    trainer.fit(model=model, datamodule=datamodule, ckpt_path=ckpt)
 
     hydra.utils.log.info("Starting testing!")
     trainer.test(datamodule=datamodule)

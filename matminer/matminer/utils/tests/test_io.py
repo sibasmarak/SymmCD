@@ -1,0 +1,171 @@
+import json
+import os
+import shutil
+import unittest
+
+import numpy as np
+import pandas as pd
+from monty.io import zopen
+from pymatgen.core import Lattice, Structure
+from pymatgen.util.testing import PymatgenTest
+from pytest import approx
+
+from matminer.utils.io import load_dataframe_from_json, store_dataframe_as_json
+
+test_dir = os.path.dirname(__file__)
+
+
+class PymatgenTestExtended(PymatgenTest):
+    """Reintroduces legacy methods from the `PymatgenTest` class."""
+
+    @staticmethod
+    def assertDictsAlmostEqual(actual, desired, decimal=7, err_msg="", verbose=True) -> bool:
+        """
+        Tests if entries in a dictionary are almost equal to a tolerance. The CamelCase
+        naming is so that it is consistent with standard unittest methods.
+
+        Modified from: https://github.com/materialsproject/pymatgen/blob/1156d0db2360a0ef32bfc1ba5c8314f7421755a3/pymatgen/util/testing.py#L80-L103
+        """
+        for k, v in actual.items():
+            if k not in desired:
+                return False
+            v2 = desired[k]
+            if isinstance(v, dict):
+                pass_test = PymatgenTestExtended.assertDictsAlmostEqual(
+                    v, v2, decimal=decimal, err_msg=err_msg, verbose=verbose
+                )
+                if not pass_test:
+                    return False
+            elif isinstance(v, (list, tuple)):
+                np.testing.assert_almost_equal(v, v2, decimal, err_msg, verbose)
+                return True
+            elif isinstance(v, (int, float)):
+                assert v == approx(v2, abs=decimal)
+            else:
+                assert v == v2
+        return True
+
+
+def generate_json_files():
+    diamond = Structure(
+        Lattice([[2.189, 0, 1.264], [0.73, 2.064, 1.264], [0, 0, 2.528]]),
+        ["C0+", "C0+"],
+        [[2.554, 1.806, 4.423], [0.365, 0.258, 0.632]],
+        validate_proximity=False,
+        to_unit_cell=False,
+        coords_are_cartesian=True,
+        site_properties=None,
+    )
+    df = pd.DataFrame(data={"structure": [diamond]})
+
+    plain_file = os.path.join(test_dir, "dataframe.json")
+    store_dataframe_as_json(df, plain_file)
+
+    gz_file = os.path.join(test_dir, "dataframe.json.gz")
+    store_dataframe_as_json(df, gz_file, compression="gz")
+
+    bz2_file = os.path.join(test_dir, "dataframe.json.bz2")
+    store_dataframe_as_json(df, bz2_file, compression="bz2")
+
+
+class IOTest(PymatgenTestExtended):
+    def setUp(self):
+        self.temp_folder = os.path.join(test_dir, "gzip_dir")
+        os.mkdir(self.temp_folder)
+
+        self.diamond = Structure(
+            Lattice([[2.189, 0, 1.264], [0.73, 2.064, 1.264], [0, 0, 2.528]]),
+            ["C0+", "C0+"],
+            [[2.554, 1.806, 4.423], [0.365, 0.258, 0.632]],
+            validate_proximity=False,
+            to_unit_cell=False,
+            coords_are_cartesian=True,
+            site_properties=None,
+        )
+        self.df = pd.DataFrame(data={"structure": [self.diamond]})
+
+    def test_store_dataframe_as_json(self):
+        # check write produces correct file
+        temp_file = os.path.join(self.temp_folder, "test_dataframe.json")
+        test_file = os.path.join(test_dir, "dataframe.json")
+        store_dataframe_as_json(self.df, temp_file)
+
+        with zopen(temp_file, "rb") as f:
+            temp_data = json.load(f)
+
+        with zopen(test_file, "rb") as f:
+            test_data = json.load(f)
+
+        # remove version otherwise this will have to be updated every time
+        # the pymatgen version changes
+        temp_data["data"][0][0].pop("@version")
+        test_data["data"][0][0].pop("@version")
+
+        self.assertDictsAlmostEqual(temp_data, test_data)
+
+        # check writing gzipped json (comparing hashes doesn't work so have to
+        # compare contents)
+        temp_file = os.path.join(self.temp_folder, "test_dataframe.json.gz")
+        test_file = os.path.join(test_dir, "dataframe.json.gz")
+        store_dataframe_as_json(self.df, temp_file, compression="gz")
+
+        with zopen(temp_file, "rb") as f:
+            temp_data = json.load(f)
+
+        with zopen(test_file, "rb") as f:
+            test_data = json.load(f)
+
+        temp_data["data"][0][0].pop("@version")
+        test_data["data"][0][0].pop("@version")
+
+        self.assertDictsAlmostEqual(temp_data, test_data)
+
+        # check writing bz2 compressed json
+        temp_file = os.path.join(self.temp_folder, "test_dataframe.json.bz2")
+        test_file = os.path.join(test_dir, "dataframe.json.bz2")
+        store_dataframe_as_json(self.df, temp_file, compression="bz2")
+
+        with zopen(temp_file, "rb") as f:
+            temp_data = json.load(f)
+
+        with zopen(test_file, "rb") as f:
+            test_data = json.load(f)
+
+        temp_data["data"][0][0].pop("@version")
+        test_data["data"][0][0].pop("@version")
+
+        self.assertDictsAlmostEqual(temp_data, test_data)
+
+        # check store_dataframe_as_json can infer compression from file name
+        temp_file = os.path.join(self.temp_folder, "test_dataframe.json.gz")
+        test_file = os.path.join(test_dir, "dataframe.json.gz")
+        store_dataframe_as_json(self.df, temp_file)
+
+        with zopen(temp_file, "rb") as f:
+            temp_data = json.load(f)
+
+        with zopen(test_file, "rb") as f:
+            test_data = json.load(f)
+
+        temp_data["data"][0][0].pop("@version")
+        test_data["data"][0][0].pop("@version")
+
+        self.assertDictsAlmostEqual(temp_data, test_data)
+
+    def test_load_dataframe_from_json(self):
+        df = load_dataframe_from_json(os.path.join(test_dir, "dataframe.json"))
+        self.assertTrue(self.diamond == df["structure"][0], "Dataframe contents do not match")
+
+        df = load_dataframe_from_json(os.path.join(test_dir, "dataframe.json.gz"))
+        self.assertTrue(self.diamond == df["structure"][0], "Dataframe contents do not match")
+
+        df = load_dataframe_from_json(os.path.join(test_dir, "dataframe.json.bz2"))
+        self.assertTrue(self.diamond == df["structure"][0], "Dataframe contents do not match")
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_folder)
+
+
+if __name__ == "__main__":
+    # generate_json_files()
+    unittest.main()

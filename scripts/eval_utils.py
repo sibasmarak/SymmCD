@@ -19,6 +19,7 @@ from diffcsp.common.constants import CompScalerMeans, CompScalerStds
 from diffcsp.common.data_utils import StandardScaler, chemical_symbols
 from diffcsp.pl_data.dataset import TensorCrystDataset
 from diffcsp.pl_data.datamodule import worker_init_fn
+from diffcsp.pl_modules.diffusion import CSPDiffusion
 
 from torch_geometric.data import DataLoader
 
@@ -85,7 +86,8 @@ def load_model(model_path, load_data=False, testing=True):
             ckpt_epochs = np.array(
                 [int(ckpt.parts[-1].split('-')[0].split('=')[1]) for ckpt in ckpts if 'last' not in ckpt.parts[-1]])
             ckpt = str(ckpts[ckpt_epochs.argsort()[-1]])
-        model = model.load_from_checkpoint(ckpt, strict=False)
+        # model = model.load_from_checkpoint(ckpt, strict=False) # old PyTorch lightning, no longer supported
+        model = CSPDiffusion.load_from_checkpoint(ckpt, strict=False)
         model.lattice_scaler = torch.load(model_path / 'lattice_scaler.pt')
         model.scaler = torch.load(model_path / 'prop_scaler.pt')
 

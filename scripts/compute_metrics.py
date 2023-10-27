@@ -26,7 +26,7 @@ sys.path.append('.')
 
 from eval_utils import (
     smact_validity, structure_validity, CompScaler, get_fp_pdist,
-    load_config, load_data, get_crystals_list, prop_model_eval, compute_cov, compute_cov_real)
+    load_config, load_data, get_crystals_list, prop_model_eval, compute_cov)
 
 CrystalNNFP = CrystalNNFingerprint.from_preset("ops")
 CompFP = ElementProperty.from_preset('magpie')
@@ -334,13 +334,15 @@ def main(args):
     if 'gen' in args.tasks:
 
         gen_file_path = get_file_paths(args.root_path, 'gen', args.label)
-        recon_file_path = get_file_paths(args.root_path, 'recon', args.label)
         crys_array_list, _ = get_crystal_array_list(gen_file_path, batch_idx = -2)
         gen_crys = p_map(lambda x: Crystal(x), crys_array_list)
         if args.gt_file != '':
             csv = pd.read_csv(args.gt_file)
             gt_crys = p_map(get_gt_crys_ori, csv['cif'])
         else:
+            # always ground gt_file is provided
+            # if not provided then only use the reconstruction path to load true crystals
+            recon_file_path = get_file_paths(args.root_path, 'recon', args.label)
             _, true_crystal_array_list = get_crystal_array_list(
                 recon_file_path)
             gt_crys = p_map(lambda x: Crystal(x), true_crystal_array_list)

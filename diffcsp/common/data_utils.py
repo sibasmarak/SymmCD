@@ -1162,8 +1162,6 @@ def process_one(row, niggli, primitive, graph_method, prop_list, use_space_group
     if use_space_group:
         crystal, sym_info = get_symmetry_info(crystal, tol = tol)
         result_dict.update(sym_info)
-        print(crystal)
-        print(sym_info)
     else:
         result_dict['spacegroup'] = 1
     graph_arrays = build_crystal_graph(crystal, graph_method)

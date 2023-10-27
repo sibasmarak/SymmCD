@@ -139,6 +139,7 @@ class CSPNet(nn.Module):
         self.max_neighbors = max_neighbors
         self.ln = ln
         self.edge_style = edge_style
+        self.pred_type = pred_type
         if self.ln:
             self.final_layer_norm = nn.LayerNorm(hidden_dim)
         if self.pred_type:

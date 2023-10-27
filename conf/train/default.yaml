@@ -6,7 +6,8 @@ random_seed: 42
 
 pl_trainer:
   fast_dev_run: False # Enable this for debug purposes
-  gpus: 1
+  devices: 1
+  accelerator: 'gpu'
   # accelerator: ddp
   precision: 32
   # max_steps: 10000

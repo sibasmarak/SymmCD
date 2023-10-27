@@ -1,3 +1,12 @@
+"""
+NOTE: 
+this script should be used for diffusion with atom types or "ab-initio generation task"
+please do not use this for model trained on diffusion without atom types
+
+for diffusion without atom types, use evaluate.py only 
+for "CSP task", we care about MR and RMSE, see Table 1 of https://arxiv.org/pdf/2309.04475.pdf
+"""
+
 import time
 import argparse
 import torch
