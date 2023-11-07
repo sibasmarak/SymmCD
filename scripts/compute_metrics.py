@@ -52,6 +52,11 @@ class Crystal(object):
         self.lengths = crys_array_dict['lengths']
         self.angles = crys_array_dict['angles']
         self.dict = crys_array_dict
+        if len(self.atom_types.shape) > 1:
+            # this implies the distribution over atom_types is passed instead of the atom_types
+            # for perov that would mean a numpy array of (5, 100) instead of (5,)
+            self.dict['atom_types'] = (np.argmax(self.atom_types, axis=-1) + 1)
+            self.atom_types = (np.argmax(self.atom_types, axis=-1) + 1)
 
         self.get_structure()
         self.get_composition()
@@ -233,6 +238,13 @@ class GenEval(object):
         return {'wdist_density': wdist_density}
 
 
+    def get_num_elem_wdist(self):
+        pred_nelems = [len(set(c.structure.species))
+                       for c in self.valid_samples]
+        gt_nelems = [len(set(c.structure.species)) for c in self.gt_crys]
+        wdist_num_elems = wasserstein_distance(pred_nelems, gt_nelems)
+        return {'wdist_num_elems': wdist_num_elems}
+
     def get_prop_wdist(self):
         if self.eval_model_name is not None:
             pred_props = prop_model_eval(self.eval_model_name, [
@@ -257,6 +269,7 @@ class GenEval(object):
         metrics.update(self.get_validity())
         metrics.update(self.get_density_wdist())
         metrics.update(self.get_prop_wdist())
+        metrics.update(self.get_num_elem_wdist())
         metrics.update(self.get_coverage())
         return metrics
 

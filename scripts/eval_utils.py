@@ -19,7 +19,6 @@ from diffcsp.common.constants import CompScalerMeans, CompScalerStds
 from diffcsp.common.data_utils import StandardScaler, chemical_symbols
 from diffcsp.pl_data.dataset import TensorCrystDataset
 from diffcsp.pl_data.datamodule import worker_init_fn
-from diffcsp.pl_modules.diffusion import CSPDiffusion
 
 from torch_geometric.data import DataLoader
 
@@ -87,7 +86,13 @@ def load_model(model_path, load_data=False, testing=True):
                 [int(ckpt.parts[-1].split('-')[0].split('=')[1]) for ckpt in ckpts if 'last' not in ckpt.parts[-1]])
             ckpt = str(ckpts[ckpt_epochs.argsort()[-1]])
         # model = model.load_from_checkpoint(ckpt, strict=False) # old PyTorch lightning, no longer supported
-        model = CSPDiffusion.load_from_checkpoint(ckpt, strict=False)
+        if cfg.model._target_ == "diffcsp.pl_modules.diffusion.CSPDiffusion":
+            from diffcsp.pl_modules.diffusion import CSPDiffusion as Model
+        elif cfg.model._target_ == "diffcsp.pl_modules.diffusion_w_type.CSPDiffusion":
+            from diffcsp.pl_modules.diffusion_w_type import CSPDiffusion as Model
+        elif cfg.model._target_ == "diffcsp.pl_modules.model.CrystGNN_Supervise":
+            from diffcsp.pl_modules.model import CrystGNN_Supervise as Model
+        model = Model.load_from_checkpoint(ckpt, strict=False)
         model.lattice_scaler = torch.load(model_path / 'lattice_scaler.pt')
         model.scaler = torch.load(model_path / 'prop_scaler.pt')
 
@@ -229,6 +234,8 @@ def prop_model_eval(eval_model_name, crystal_array_list):
     all_preds = []
 
     for batch in loader:
+        # NOTE: hacky-fix to run the pre-trained proxy models (CrystGNN_Supervise) for getting preds, model is in cuda and batch is in cpu
+        model = model.to('cpu')
         preds = model(batch)
         model.scaler.match_device(preds)
         scaled_preds = model.scaler.inverse_transform(preds)

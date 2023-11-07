@@ -87,6 +87,7 @@ class CrystDataset(Dataset):
             data.spacegroup = torch.LongTensor([data_dict['spacegroup']])
             data.ops = torch.Tensor(data_dict['wyckoff_ops'])
             data.anchor_index = torch.LongTensor(data_dict['anchors'])
+            data.operations = data_dict['operations']
 
         if self.use_pos_index:
             pos_dic = {}

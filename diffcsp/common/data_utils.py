@@ -149,10 +149,12 @@ def get_symmetry_info(crystal, tol=0.01):
         specie = site.specie
         anchor = len(matrices)
         coord = site.position
+        species.append(specie)
+        coords.append(coord)
         for syms in site.wp:
-            species.append(specie)
+            # species.append(specie) # only keep track of representatives
             matrices.append(syms.affine_matrix)
-            coords.append(syms.operate(coord))
+            # coords.append(syms.operate(coord)) # only keep track of representatives
             anchors.append(anchor)
     anchors = np.array(anchors)
     matrices = np.array(matrices)
@@ -160,7 +162,12 @@ def get_symmetry_info(crystal, tol=0.01):
     sym_info = {
         'anchors':anchors,
         'wyckoff_ops':matrices,
-        'spacegroup':space_group
+        'spacegroup':space_group,
+        'operations':c.group[0], # symmetry operations for general Wyckoff position
+        # to find all the positions due to the space group
+        # coords = [syms.operate(c.atom_sites[1].position) for syms in c.group[0]]
+        # coords = np.array(coords)
+        # uniq_coords = np.unique(coords + (coords < 0), axis=0)
     }
     crystal = Structure(
         lattice=Lattice.from_parameters(*np.array(c.lattice.get_para(degree=True))),
