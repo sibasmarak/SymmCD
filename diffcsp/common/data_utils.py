@@ -132,7 +132,7 @@ def refine_spacegroup(crystal, tol=0.01):
     return crystal, space_group
 
 
-def get_symmetry_info(crystal, tol=0.01):
+def get_symmetry_info(crystal, tol=0.01, use_representatives=False):
     spga = SpacegroupAnalyzer(crystal, symprec=tol)
     crystal = spga.get_refined_structure()
     c = pyxtal()
@@ -149,12 +149,14 @@ def get_symmetry_info(crystal, tol=0.01):
         specie = site.specie
         anchor = len(matrices)
         coord = site.position
-        species.append(specie)
-        coords.append(coord)
+        if not use_representatives:
+            species.append(specie)
+            coords.append(coord)
         for syms in site.wp:
-            # species.append(specie) # only keep track of representatives
+            if use_representatives:
+                species.append(specie) # only keep track of representatives
+                coords.append(syms.operate(coord)) # only keep track of representatives
             matrices.append(syms.affine_matrix)
-            # coords.append(syms.operate(coord)) # only keep track of representatives
             anchors.append(anchor)
     anchors = np.array(anchors)
     matrices = np.array(matrices)
@@ -1161,13 +1163,13 @@ def get_scaler_from_data_list(data_list, key):
     return scaler
 
 
-def process_one(row, niggli, primitive, graph_method, prop_list, use_space_group = False, tol=0.01):
+def process_one(row, niggli, primitive, graph_method, prop_list, use_space_group = False, tol=0.01, use_representatives=False):
     crystal_str = row['cif']
     crystal = build_crystal(
         crystal_str, niggli=niggli, primitive=primitive)
     result_dict = {}
     if use_space_group:
-        crystal, sym_info = get_symmetry_info(crystal, tol = tol)
+        crystal, sym_info = get_symmetry_info(crystal, tol = tol, use_representatives=use_representatives)
         result_dict.update(sym_info)
     else:
         result_dict['spacegroup'] = 1
@@ -1183,7 +1185,7 @@ def process_one(row, niggli, primitive, graph_method, prop_list, use_space_group
 
 
 def preprocess(input_file, num_workers, niggli, primitive, graph_method,
-               prop_list, use_space_group = False, tol=0.01):
+               prop_list, use_space_group = False, tol=0.01, use_representatives=False):
     df = pd.read_csv(input_file)
 
     unordered_results = p_umap(
@@ -1195,6 +1197,7 @@ def preprocess(input_file, num_workers, niggli, primitive, graph_method,
         [prop_list] * len(df),
         [use_space_group] * len(df),
         [tol] * len(df),
+        [use_representatives] * len(df),
         num_cpus=num_workers)
 
     mpid_to_results = {result['mp_id']: result for result in unordered_results}

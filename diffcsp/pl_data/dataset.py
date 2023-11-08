@@ -19,6 +19,7 @@ class CrystDataset(Dataset):
                  prop: ValueNode, niggli: ValueNode, primitive: ValueNode,
                  graph_method: ValueNode, preprocess_workers: ValueNode,
                  lattice_scale_method: ValueNode, save_path: ValueNode, tolerance: ValueNode, use_space_group: ValueNode, use_pos_index: ValueNode,
+                 use_representatives=False,
                  **kwargs):
         super().__init__()
         self.path = path
@@ -32,6 +33,7 @@ class CrystDataset(Dataset):
         self.use_space_group = use_space_group
         self.use_pos_index = use_pos_index
         self.tolerance = tolerance
+        self.use_representatives = use_representatives
 
         self.preprocess(save_path, preprocess_workers, prop)
 
@@ -51,7 +53,8 @@ class CrystDataset(Dataset):
             graph_method=self.graph_method,
             prop_list=[prop],
             use_space_group=self.use_space_group,
-            tol=self.tolerance)
+            tol=self.tolerance,
+            use_representatives=self.use_representatives)
             torch.save(cached_data, save_path)
             self.cached_data = cached_data
 
