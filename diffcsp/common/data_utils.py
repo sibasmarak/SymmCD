@@ -232,8 +232,7 @@ def build_crystal_graph(crystal, graph_method='crystalnn'):
     assert np.allclose(crystal.lattice.matrix,
                        lattice_params_to_matrix(*lengths, *angles))
 
-    ks = lattice_to_ks(crystal.lattice.matrix)
-    assert np.allclose(crystal.lattice.matrix, lattice_from_ks(ks))
+    ks = lattice_to_ks(crystal.lattice.matrix) # Note: may correspond to a rotated lattice
 
     edge_indices, to_jimages = [], []
     if graph_method != 'none':
@@ -1206,7 +1205,6 @@ def process_one(row, niggli, primitive, graph_method, prop_list, use_space_group
     crystal = build_crystal(
         crystal_str, niggli=niggli, primitive=primitive)
     lattice_matrix = crystal.lattice.matrix
-    lattice_ks = lattice_to_ks(lattice_matrix)
     result_dict = {}
     if use_space_group:
         crystal, sym_info = get_symmetry_info(crystal, tol = tol, use_representatives=use_representatives)
@@ -1219,7 +1217,6 @@ def process_one(row, niggli, primitive, graph_method, prop_list, use_space_group
         'mp_id': row['material_id'],
         'cif': crystal_str,
         'graph_arrays': graph_arrays,
-        'lattice_ks': lattice_ks
     })
     result_dict.update(properties)
     return result_dict

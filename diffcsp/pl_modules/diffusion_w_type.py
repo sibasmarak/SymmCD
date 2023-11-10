@@ -230,7 +230,7 @@ class CSPDiffusion(BaseModule):
             std_x = torch.sqrt(2 * step_size)
 
             lattice_feats_t = k_t if self.use_ks else l_t
-            pred_l, pred_x, pred_t = self.decoder(time_emb, t_t, x_t, lattice_feats_t, l_t, batch.num_atoms, batch.batch)
+            pred_lattice, pred_x, pred_t = self.decoder(time_emb, t_t, x_t, lattice_feats_t, l_t, batch.num_atoms, batch.batch)
 
             pred_x = pred_x * torch.sqrt(sigma_norm)
 
@@ -263,7 +263,7 @@ class CSPDiffusion(BaseModule):
                 k_t_minus_1 = c0 * (k_t_minus_05 - c1 * pred_lattice) + sigmas * rand_k if not self.keep_lattice else k_t
                 l_t_minus_1 = lattice_ks_to_matrix_torch(k_t_minus_1) if not self.keep_lattice else l_t
             else:
-                l_t_minus_1 = c0 * (l_t_minus_05 - c1 * pred_l) + sigmas * rand_l if not self.keep_lattice else l_t
+                l_t_minus_1 = c0 * (l_t_minus_05 - c1 * pred_lattice) + sigmas * rand_l if not self.keep_lattice else l_t
                 k_t_minus_1 = k_t
 
             t_t_minus_1 = c0 * (t_t_minus_05 - c1 * pred_t) + sigmas * rand_t

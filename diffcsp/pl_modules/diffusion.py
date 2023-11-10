@@ -123,18 +123,22 @@ class CSPDiffusion(BaseModule):
         sigmas = self.sigma_scheduler.sigmas[times]
         sigmas_norm = self.sigma_scheduler.sigmas_norm[times]
 
-        lattices = lattice_params_to_matrix_torch(batch.lengths, batch.angles)
+        ks = batch.ks
         if self.use_ks:
-            ks = batch.ks
+            lattices = lattice_ks_to_matrix_torch(batch.ks)
+        else:
+            lattices = lattice_params_to_matrix_torch(batch.lengths, batch.angles)
+
         frac_coords = batch.frac_coords
 
         rand_x = torch.randn_like(frac_coords)
+        rand_ks = torch.randn_like(ks)
+        rand_l = torch.randn_like(lattices)
+
+        input_ks = c0[:, None] * ks + c1[:, None] * rand_ks
         if self.use_ks:
-            rand_ks = torch.randn_like(ks)
-            input_ks = c0[:, None] * ks + c1[:, None] * rand_ks
             input_lattice = lattice_ks_to_matrix_torch(input_ks)
         else:
-            rand_l = torch.randn_like(lattices)
             input_lattice = c0[:, None, None] * lattices + c1[:, None, None] * rand_l
         sigmas_per_atom = sigmas.repeat_interleave(batch.num_atoms)[:, None]
         sigmas_norm_per_atom = sigmas_norm.repeat_interleave(batch.num_atoms)[:, None]
@@ -186,7 +190,10 @@ class CSPDiffusion(BaseModule):
 
         if self.keep_lattice:
             k_T = batch.ks
-            l_T = lattice_params_to_matrix_torch(batch.lengths, batch.angles)
+            if self.use_ks:
+                l_T = lattice_ks_to_matrix_torch(k_T)
+            else:
+                l_T = lattice_params_to_matrix_torch(batch.lengths, batch.angles)
 
         time_start = self.beta_scheduler.timesteps
 
@@ -272,7 +279,7 @@ class CSPDiffusion(BaseModule):
                 k_t_minus_1 = c0 * (k_t_minus_05 - c1 * pred_lattice) + sigmas * rand_k if not self.keep_lattice else k_t
                 l_t_minus_1 = lattice_ks_to_matrix_torch(k_t_minus_1) if not self.keep_lattice else l_t
             else:
-                l_t_minus_1 = c0 * (l_t_minus_05 - c1 * pred_l) + sigmas * rand_l if not self.keep_lattice else l_t
+                l_t_minus_1 = c0 * (l_t_minus_05 - c1 * pred_lattice) + sigmas * rand_l if not self.keep_lattice else l_t
                 k_t_minus_1 = k_t
 
 
