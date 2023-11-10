@@ -9,5 +9,6 @@ num_freqs: 128
 edge_style: fc
 max_neighbors: ${model.max_neighbors}
 cutoff: ${model.radius}
+use_ks: ${model.use_ks}
 ln: true
-ip: true
+ip: ${model.ip}

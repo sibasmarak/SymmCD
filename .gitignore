@@ -162,3 +162,5 @@ output/
 *.pt
 
 cdvae
+hydra/singlerun/
+scripts/logs/

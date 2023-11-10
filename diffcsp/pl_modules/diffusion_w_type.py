@@ -20,7 +20,7 @@ from tqdm import tqdm
 from diffcsp.common.utils import PROJECT_ROOT
 from diffcsp.common.data_utils import (
     EPSILON, cart_to_frac_coords, mard, lengths_angles_to_volume, lattice_params_to_matrix_torch,
-    frac_to_cart_coords, min_distance_sqr_pbc)
+    frac_to_cart_coords, min_distance_sqr_pbc, lattice_ks_to_matrix_torch)
 
 from diffcsp.pl_modules.diff_utils import d_log_p_wrapped_normal
 
@@ -82,6 +82,7 @@ class CSPDiffusion(BaseModule):
         self.time_embedding = SinusoidalTimeEmbeddings(self.time_dim)
         self.keep_lattice = self.hparams.cost_lattice < 1e-5
         self.keep_coords = self.hparams.cost_coord < 1e-5
+        self.use_ks = self.hparams.use_ks
 
 
 
@@ -101,11 +102,18 @@ class CSPDiffusion(BaseModule):
         sigmas_norm = self.sigma_scheduler.sigmas_norm[times]
 
         lattices = lattice_params_to_matrix_torch(batch.lengths, batch.angles)
+        if self.use_ks:
+            ks = batch.ks
         frac_coords = batch.frac_coords
 
-        rand_l, rand_x = torch.randn_like(lattices), torch.randn_like(frac_coords)
-
-        input_lattice = c0[:, None, None] * lattices + c1[:, None, None] * rand_l
+        rand_x = torch.randn_like(frac_coords)
+        if self.use_ks:
+            rand_ks = torch.randn_like(ks)
+            input_ks = c0[:, None] * ks + c1[:, None] * rand_ks
+            input_lattice = lattice_ks_to_matrix_torch(input_ks)
+        else:
+            rand_l = torch.randn_like(lattices)
+            input_lattice = c0[:, None, None] * lattices + c1[:, None, None] * rand_l
         sigmas_per_atom = sigmas.repeat_interleave(batch.num_atoms)[:, None]
         sigmas_norm_per_atom = sigmas_norm.repeat_interleave(batch.num_atoms)[:, None]
         input_frac_coords = (frac_coords + sigmas_per_atom * rand_x) % 1.
@@ -121,13 +129,19 @@ class CSPDiffusion(BaseModule):
 
         if self.keep_lattice:
             input_lattice = lattices
+            input_ks = ks
 
-        pred_l, pred_x, pred_t = self.decoder(time_emb, atom_type_probs, input_frac_coords, input_lattice, batch.num_atoms, batch.batch)
+        lattice_feats = input_ks if self.use_ks else input_lattice
+
+        pred_lattice, pred_x, pred_t = self.decoder(time_emb, atom_type_probs, input_frac_coords, lattice_feats, input_lattice, batch.num_atoms, batch.batch)
 
         tar_x = d_log_p_wrapped_normal(sigmas_per_atom * rand_x, sigmas_per_atom) / torch.sqrt(sigmas_norm_per_atom)
 
         # pred_x and tar_x should be symmetrized
-        loss_lattice = F.mse_loss(pred_l, rand_l) # 1024,3,3
+        if self.use_ks:
+            loss_lattice = F.mse_loss(pred_lattice, rand_ks) # 1024,6
+        else:
+            loss_lattice = F.mse_loss(pred_lattice, rand_l) # 1024,3,3    
         loss_coord = F.mse_loss(pred_x, tar_x) # 4604, 3
         loss_type = F.mse_loss(pred_t, rand_t) # 4604, 100
 
@@ -150,8 +164,13 @@ class CSPDiffusion(BaseModule):
 
         batch_size = batch.num_graphs
 
-        l_T, x_T = torch.randn([batch_size, 3, 3]).to(self.device), torch.rand([batch.num_nodes, 3]).to(self.device)
-
+        if self.use_ks:
+            k_T = torch.randn([batch_size, 6]).to(self.device), 
+            l_T = lattice_ks_to_matrix_torch(k_T)
+        else:
+            l_T = torch.randn([batch_size, 3, 3]).to(self.device), 
+            k_T = torch.zeros([batch_size, 6]).to(self.device) # dummy 
+        x_T = torch.rand([batch.num_nodes, 3]).to(self.device)
         t_T = torch.randn([batch.num_nodes, MAX_ATOMIC_NUM]).to(self.device)
 
 
@@ -159,14 +178,15 @@ class CSPDiffusion(BaseModule):
             x_T = batch.frac_coords
 
         if self.keep_lattice:
-            l_T = lattice_params_to_matrix_torch(batch.lengths, batch.angles)
-        
+            k_T = batch.ks
+            l_T = lattice_params_to_matrix_torch(batch.lengths, batch.angles)     
 
         traj = {self.beta_scheduler.timesteps : {
             'num_atoms' : batch.num_atoms,
             'atom_types' : t_T,
             'frac_coords' : x_T % 1.,
-            'lattices' : l_T
+            'lattices' : l_T,
+            'ks': k_T
         }}
 
         for t in tqdm(range(self.beta_scheduler.timesteps, 0, -1)):
@@ -187,52 +207,64 @@ class CSPDiffusion(BaseModule):
 
             x_t = traj[t]['frac_coords']
             l_t = traj[t]['lattices']
+            k_t = traj[t]['ks']
             t_t = traj[t]['atom_types']
 
             if self.keep_coords:
                 x_t = x_T
 
             if self.keep_lattice:
+                k_t = k_T
                 l_t = l_T
 
             # Corrector
-
-            rand_l = torch.randn_like(l_T) if t > 1 else torch.zeros_like(l_T)
+            # For whatever reason, lattice parameters are not updated in the original code.
+            if self.use_ks:
+                rand_k = torch.randn_like(k_T) if t > 1 else torch.zeros_like(k_T)
+            else:
+                rand_l = torch.randn_like(l_T) if t > 1 else torch.zeros_like(l_T)
             rand_t = torch.randn_like(t_T) if t > 1 else torch.zeros_like(t_T)
             rand_x = torch.randn_like(x_T) if t > 1 else torch.zeros_like(x_T)
 
             step_size = step_lr * (sigma_x / self.sigma_scheduler.sigma_begin) ** 2
             std_x = torch.sqrt(2 * step_size)
 
-            pred_l, pred_x, pred_t = self.decoder(time_emb, t_t, x_t, l_t, batch.num_atoms, batch.batch)
+            lattice_feats_t = k_t if self.use_ks else l_t
+            pred_l, pred_x, pred_t = self.decoder(time_emb, t_t, x_t, lattice_feats_t, l_t, batch.num_atoms, batch.batch)
 
             pred_x = pred_x * torch.sqrt(sigma_norm)
 
             x_t_minus_05 = x_t - step_size * pred_x + std_x * rand_x if not self.keep_coords else x_t
-
+            k_t_minus_05 = k_t
             l_t_minus_05 = l_t
 
             t_t_minus_05 = t_t
 
 
             # Predictor
-
-            rand_l = torch.randn_like(l_T) if t > 1 else torch.zeros_like(l_T)
+            if self.use_ks:
+                rand_k = torch.randn_like(k_T) if t > 1 else torch.zeros_like(k_T)
+            else:
+                rand_l = torch.randn_like(l_T) if t > 1 else torch.zeros_like(l_T)
             rand_t = torch.randn_like(t_T) if t > 1 else torch.zeros_like(t_T)
             rand_x = torch.randn_like(x_T) if t > 1 else torch.zeros_like(x_T)
 
             adjacent_sigma_x = self.sigma_scheduler.sigmas[t-1] 
             step_size = (sigma_x ** 2 - adjacent_sigma_x ** 2)
             std_x = torch.sqrt((adjacent_sigma_x ** 2 * (sigma_x ** 2 - adjacent_sigma_x ** 2)) / (sigma_x ** 2))   
+            lattice_feats_t_minus_05 = k_t_minus_05 if self.use_ks else l_t_minus_05
 
-
-            pred_l, pred_x, pred_t = self.decoder(time_emb, t_t_minus_05, x_t_minus_05, l_t_minus_05, batch.num_atoms, batch.batch)
+            pred_lattice, pred_x, pred_t = self.decoder(time_emb, t_t_minus_05, x_t_minus_05, lattice_feats_t_minus_05, l_t_minus_05, batch.num_atoms, batch.batch)
 
             pred_x = pred_x * torch.sqrt(sigma_norm)
 
             x_t_minus_1 = x_t_minus_05 - step_size * pred_x + std_x * rand_x if not self.keep_coords else x_t
-
-            l_t_minus_1 = c0 * (l_t_minus_05 - c1 * pred_l) + sigmas * rand_l if not self.keep_lattice else l_t
+            if self.use_ks:
+                k_t_minus_1 = c0 * (k_t_minus_05 - c1 * pred_lattice) + sigmas * rand_k if not self.keep_lattice else k_t
+                l_t_minus_1 = lattice_ks_to_matrix_torch(k_t_minus_1) if not self.keep_lattice else l_t
+            else:
+                l_t_minus_1 = c0 * (l_t_minus_05 - c1 * pred_l) + sigmas * rand_l if not self.keep_lattice else l_t
+                k_t_minus_1 = k_t
 
             t_t_minus_1 = c0 * (t_t_minus_05 - c1 * pred_t) + sigmas * rand_t
 
@@ -240,14 +272,16 @@ class CSPDiffusion(BaseModule):
                 'num_atoms' : batch.num_atoms,
                 'atom_types' : t_t_minus_1,
                 'frac_coords' : x_t_minus_1 % 1.,
-                'lattices' : l_t_minus_1              
+                'lattices' : l_t_minus_1,
+                'ks': k_t_minus_1
             }
 
         traj_stack = {
             'num_atoms' : batch.num_atoms,
             'atom_types' : torch.stack([traj[i]['atom_types'] for i in range(self.beta_scheduler.timesteps, -1, -1)]).argmax(dim=-1) + 1,
             'all_frac_coords' : torch.stack([traj[i]['frac_coords'] for i in range(self.beta_scheduler.timesteps, -1, -1)]),
-            'all_lattices' : torch.stack([traj[i]['lattices'] for i in range(self.beta_scheduler.timesteps, -1, -1)])
+            'all_lattices' : torch.stack([traj[i]['lattices'] for i in range(self.beta_scheduler.timesteps, -1, -1)]),
+            'all_ks': torch.stack([traj[i]['ks'] for i in range(self.beta_scheduler.timesteps, -1, -1)])
         }
 
         return traj[0], traj_stack

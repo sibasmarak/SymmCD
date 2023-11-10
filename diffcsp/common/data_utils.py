@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import networkx as nx
+import scipy
 import torch
 import copy
 import itertools
@@ -93,6 +94,32 @@ chemical_symbols = [
     'Cf', 'Es', 'Fm', 'Md', 'No', 'Lr',
     'Rf', 'Db', 'Sg', 'Bh', 'Hs', 'Mt', 'Ds', 'Rg', 'Cn', 'Nh', 'Fl', 'Mc',
     'Lv', 'Ts', 'Og']
+
+B_MATRICES = np.zeros((6, 3, 3))
+B_MATRICES[0, 0, 1] = B_MATRICES[0, 1, 0] = 1
+B_MATRICES[1, 0, 2] = B_MATRICES[1, 2, 0] = 1
+B_MATRICES[2, 1, 2] = B_MATRICES[2, 2, 1] = 1
+B_MATRICES[3, 0, 0] = 1
+B_MATRICES[3, 1, 1] = -1
+B_MATRICES[4, 0, 0] = B_MATRICES[4, 1, 1] = 1
+B_MATRICES[4, 2, 2] = -2
+B_MATRICES[5, 0, 0] =  B_MATRICES[5, 1, 1]  = B_MATRICES[5, 2, 2]  = 1
+
+def lattice_from_ks(ks):
+    ks = ks.reshape(6, 1, 1)
+    S = np.multiply(ks, B_MATRICES).sum(0)
+    L =scipy.linalg.expm(S)
+    return L
+
+def frobenius_prod(A, B):
+    return np.trace(A.T @ B)
+
+def lattice_to_ks(L):
+    ks = np.zeros(6)
+    S = scipy.linalg.logm(L)
+    for i in range(6):
+        ks[i] = frobenius_prod(S, B_MATRICES[i]) / frobenius_prod(B_MATRICES[i], B_MATRICES[i])
+    return ks
 
 
 CrystalNN = local_env.CrystalNN(
@@ -205,6 +232,9 @@ def build_crystal_graph(crystal, graph_method='crystalnn'):
     assert np.allclose(crystal.lattice.matrix,
                        lattice_params_to_matrix(*lengths, *angles))
 
+    ks = lattice_to_ks(crystal.lattice.matrix)
+    assert np.allclose(crystal.lattice.matrix, lattice_from_ks(ks))
+
     edge_indices, to_jimages = [], []
     if graph_method != 'none':
         for i, j, to_jimage in crystal_graph.graph.edges(data='to_jimage'):
@@ -219,7 +249,7 @@ def build_crystal_graph(crystal, graph_method='crystalnn'):
     to_jimages = np.array(to_jimages)
     num_atoms = atom_types.shape[0]
 
-    return frac_coords, atom_types, lengths, angles, edge_indices, to_jimages, num_atoms
+    return frac_coords, atom_types, lengths, angles, ks, edge_indices, to_jimages, num_atoms
 
 
 def abs_cap(val, max_abs_val=1):
@@ -259,6 +289,14 @@ def lattice_params_to_matrix(a, b, c, alpha, beta, gamma):
     vector_c = [0.0, 0.0, float(c)]
     return np.array([vector_a, vector_b, vector_c])
 
+def lattice_ks_to_matrix_torch(ks):
+    """Converts lattice from k-space vectors to matrix.
+    Args:
+        ks: torch.Tensor of shape (N, 6)
+    """
+    S = torch.einsum('bij,nb->nij', torch.tensor(B_MATRICES, device=ks.device, dtype=ks.dtype), ks)
+    L = torch.matrix_exp(S)
+    return L
 
 def lattice_params_to_matrix_torch(lengths, angles):
     """Batched torch version to compute lattice matrix from params.
@@ -1167,6 +1205,8 @@ def process_one(row, niggli, primitive, graph_method, prop_list, use_space_group
     crystal_str = row['cif']
     crystal = build_crystal(
         crystal_str, niggli=niggli, primitive=primitive)
+    lattice_matrix = crystal.lattice.matrix
+    lattice_ks = lattice_to_ks(lattice_matrix)
     result_dict = {}
     if use_space_group:
         crystal, sym_info = get_symmetry_info(crystal, tol = tol, use_representatives=use_representatives)
@@ -1178,7 +1218,8 @@ def process_one(row, niggli, primitive, graph_method, prop_list, use_space_group
     result_dict.update({
         'mp_id': row['material_id'],
         'cif': crystal_str,
-        'graph_arrays': graph_arrays
+        'graph_arrays': graph_arrays,
+        'lattice_ks': lattice_ks
     })
     result_dict.update(properties)
     return result_dict
