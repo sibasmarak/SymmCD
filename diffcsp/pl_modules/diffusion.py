@@ -178,7 +178,7 @@ class CSPDiffusion(BaseModule):
 
         batch_size = batch.num_graphs
         if self.use_ks:
-            k_T = torch.randn([batch_size, 6]).to(self.device), 
+            k_T = torch.randn([batch_size, 6]).to(self.device)
             l_T = lattice_ks_to_matrix_torch(k_T)
         else:
             l_T = torch.randn([batch_size, 3, 3]).to(self.device), 
