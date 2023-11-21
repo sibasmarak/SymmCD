@@ -150,7 +150,6 @@ class CSPNet(nn.Module):
         self.pred_type = pred_type
         if self.ln:
             self.final_layer_norm = nn.LayerNorm(hidden_dim)
-        self.pred_type = pred_type
         if self.pred_type:
             self.type_out = nn.Linear(hidden_dim, MAX_ATOMIC_NUM)
 
@@ -291,7 +290,7 @@ class CSPNet(nn.Module):
         if not self.use_ks:
             lattice_out = lattice_out.view(-1, 3, 3)
             if self.ip:
-                lattice_out = torch.einsum('bij,bjk->bik', lattice_feats, lattices)
+                lattice_out = torch.einsum('bij,bjk->bik', lattice_out, lattices)
         if self.pred_type:
             type_out = self.type_out(node_features)
             return lattice_out, coord_out, type_out
