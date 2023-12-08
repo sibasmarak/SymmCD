@@ -105,6 +105,8 @@ B_MATRICES[4, 0, 0] = B_MATRICES[4, 1, 1] = 1
 B_MATRICES[4, 2, 2] = -2
 B_MATRICES[5, 0, 0] =  B_MATRICES[5, 1, 1]  = B_MATRICES[5, 2, 2]  = 1
 
+N_SPACEGROUPS = 230
+
 def lattice_from_ks(ks):
     ks = ks.reshape(6, 1, 1)
     S = np.multiply(ks, B_MATRICES).sum(0)
@@ -120,6 +122,34 @@ def lattice_to_ks(L):
     for i in range(6):
         ks[i] = frobenius_prod(S, B_MATRICES[i]) / frobenius_prod(B_MATRICES[i], B_MATRICES[i])
     return ks
+
+
+def sg_to_ks_mask(sg):
+    n_lattices = sg.shape[0]
+    ks_mask = torch.ones((n_lattices, 6)).to(sg.device)
+    ks_add = torch.zeros((n_lattices, 6)).to(sg.device)
+    triclinic_mask = (sg > 0) & (sg <= 2)
+
+    monoclinic_mask  = (sg >= 3) & (sg <= 15)
+    ks_mask[monoclinic_mask, 0] = ks_mask[monoclinic_mask, 2] = 0
+
+    orthorhombic_mask = (sg >= 16) & (sg <= 74)
+    ks_mask[orthorhombic_mask, 0:3] =  0
+
+    tetragonal_mask = (sg >= 75) & (sg <= 142)
+    ks_mask[tetragonal_mask, 0:4] = 0
+
+    hexagonal_mask = (sg >= 143) & (sg <= 194)
+    ks_mask[hexagonal_mask, 0:4] = 0
+    ks_add[hexagonal_mask, 0] = -np.log(3)/4
+
+    cubic_mask = (sg >= 195) & (sg <= 230)
+    ks_mask[cubic_mask, 0:5] = 0
+
+    return ks_mask, ks_add
+
+def mask_ks(ks, ks_mask, ks_add):
+    return ks * ks_mask + ks_add
 
 
 CrystalNN = local_env.CrystalNN(

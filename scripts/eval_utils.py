@@ -16,7 +16,7 @@ import sys
 sys.path.append('.')
 
 from diffcsp.common.constants import CompScalerMeans, CompScalerStds
-from diffcsp.common.data_utils import StandardScaler, chemical_symbols
+from diffcsp.common.data_utils import StandardScaler, chemical_symbols, get_symmetry_info
 from diffcsp.pl_data.dataset import TensorCrystDataset
 from diffcsp.pl_data.datamodule import worker_init_fn
 
@@ -116,7 +116,7 @@ def load_model(model_path, load_data=False, testing=True):
 
 
 def get_crystals_list(
-        frac_coords, atom_types, lengths, angles, num_atoms):
+        frac_coords, atom_types, lengths, angles, num_atoms, spacegroups):
     """
     args:
         frac_coords: (num_atoms, 3)
@@ -135,12 +135,14 @@ def get_crystals_list(
         cur_atom_types = atom_types.narrow(0, start_idx, num_atom)
         cur_lengths = lengths[batch_idx]
         cur_angles = angles[batch_idx]
+        cur_spacegroups = spacegroups[batch_idx]
 
         crystal_array_list.append({
             'frac_coords': cur_frac_coords.detach().cpu().numpy(),
             'atom_types': cur_atom_types.detach().cpu().numpy(),
             'lengths': cur_lengths.detach().cpu().numpy(),
             'angles': cur_angles.detach().cpu().numpy(),
+            'spacegroups': cur_spacegroups.detach().cpu().numpy(),
         })
         start_idx = start_idx + num_atom
     return crystal_array_list

@@ -17,7 +17,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from torch_geometric.data import Data, Batch, DataLoader
 from torch.utils.data import Dataset
-from eval_utils import load_model, lattices_to_params_shape, get_crystals_list
+from scripts.eval_utils import load_model, lattices_to_params_shape, get_crystals_list
+from diffcsp.common.constants import SpaceGroupDist
 
 from pymatgen.core.structure import Structure
 from pymatgen.core.lattice import Lattice
@@ -89,6 +90,7 @@ def diffusion(loader, model, step_lr):
     atom_types = []
     lattices = []
     input_data_list = []
+    spacegroups = []
     for idx, batch in enumerate(loader):
 
         if torch.cuda.is_available():
@@ -98,15 +100,18 @@ def diffusion(loader, model, step_lr):
         num_atoms.append(outputs['num_atoms'].detach().cpu())
         atom_types.append(outputs['atom_types'].detach().cpu())
         lattices.append(outputs['lattices'].detach().cpu())
+        spacegroups.append(outputs['spacegroup'].detach().cpu())
+
 
     frac_coords = torch.cat(frac_coords, dim=0)
     num_atoms = torch.cat(num_atoms, dim=0)
     atom_types = torch.cat(atom_types, dim=0)
     lattices = torch.cat(lattices, dim=0)
     lengths, angles = lattices_to_params_shape(lattices)
+    spacegroups = torch.cat(spacegroups, dim=0)
 
     return (
-        frac_coords, atom_types, lattices, lengths, angles, num_atoms
+        frac_coords, atom_types, lattices, lengths, angles, num_atoms, spacegroups
     )
 
 class SampleDataset(Dataset):
@@ -115,7 +120,10 @@ class SampleDataset(Dataset):
         super().__init__()
         self.total_num = total_num
         self.distribution = train_dist[dataset]
+        self.sg_distribution = SpaceGroupDist[dataset]
+
         self.num_atoms = np.random.choice(len(self.distribution), total_num, p = self.distribution)
+        self.sg = np.random.choice(len(self.sg_distribution), total_num, p = self.sg_distribution)
         self.is_carbon = dataset == 'carbon'
 
     def __len__(self) -> int:
@@ -127,6 +135,7 @@ class SampleDataset(Dataset):
         data = Data(
             num_atoms=torch.LongTensor([num_atom]),
             num_nodes=num_atom,
+            spacegroup=torch.LongTensor([self.sg[index]]),
         )
         if self.is_carbon:
             data.atom_types = torch.LongTensor([6] * num_atom)
@@ -148,7 +157,7 @@ def main(args):
     test_loader = DataLoader(test_set, batch_size = args.batch_size)
 
     start_time = time.time()
-    (frac_coords, atom_types, lattices, lengths, angles, num_atoms) = diffusion(test_loader, model, args.step_lr)
+    (frac_coords, atom_types, lattices, lengths, angles, num_atoms, spacegroups) = diffusion(test_loader, model, args.step_lr)
 
     if args.label == '':
         gen_out_name = 'eval_gen.pt'
@@ -162,6 +171,7 @@ def main(args):
         'atom_types': atom_types,
         'lengths': lengths,
         'angles': angles,
+        'spacegroups': spacegroups,
     }, model_path / gen_out_name)
       
 

@@ -20,7 +20,7 @@ from tqdm import tqdm
 from diffcsp.common.utils import PROJECT_ROOT
 from diffcsp.common.data_utils import (
     EPSILON, cart_to_frac_coords, mard, lengths_angles_to_volume, lattice_params_to_matrix_torch,
-    frac_to_cart_coords, min_distance_sqr_pbc, lattice_ks_to_matrix_torch)
+    frac_to_cart_coords, min_distance_sqr_pbc, lattice_ks_to_matrix_torch, sg_to_ks_mask, mask_ks, N_SPACEGROUPS)
 
 from diffcsp.pl_modules.diff_utils import d_log_p_wrapped_normal
 
@@ -83,6 +83,9 @@ class CSPDiffusion(BaseModule):
         self.keep_lattice = self.hparams.cost_lattice < 1e-5
         self.keep_coords = self.hparams.cost_coord < 1e-5
         self.use_ks = self.hparams.use_ks
+        self.use_spacegroup = self.hparams.use_spacegroup
+        self.condition_spacegroup = self.hparams.condition_spacegroup
+
 
 
     def reparameterize(self, mu, logvar):
@@ -126,6 +129,8 @@ class CSPDiffusion(BaseModule):
         ks = batch.ks
         if self.use_ks:
             lattices = lattice_ks_to_matrix_torch(batch.ks)
+            if self.use_spacegroup:
+                ks_mask, ks_add = sg_to_ks_mask(batch.spacegroup)
         else:
             lattices = lattice_params_to_matrix_torch(batch.lengths, batch.angles)
 
@@ -135,8 +140,10 @@ class CSPDiffusion(BaseModule):
         rand_ks = torch.randn_like(ks)
         rand_l = torch.randn_like(lattices)
 
-        input_ks = c0[:, None] * ks + c1[:, None] * rand_ks
         if self.use_ks:
+            input_ks = c0[:, None] * ks + c1[:, None] * rand_ks
+            if self.use_spacegroup:
+                input_ks = mask_ks(input_ks, ks_mask, ks_add)
             input_lattice = lattice_ks_to_matrix_torch(input_ks)
         else:
             input_lattice = c0[:, None, None] * lattices + c1[:, None, None] * rand_l
@@ -153,7 +160,7 @@ class CSPDiffusion(BaseModule):
             input_ks = ks
 
         lattice_feats = input_ks if self.use_ks else input_lattice
-        pred_lattice, pred_x = self.decoder(time_emb, batch.atom_types, input_frac_coords, lattice_feats, input_lattice, batch.num_atoms, batch.batch)
+        pred_lattice, pred_x = self.decoder(time_emb, batch.atom_types, input_frac_coords, lattice_feats, input_lattice, batch.num_atoms, batch.batch, batch.spacegroup)
 
         tar_x = d_log_p_wrapped_normal(sigmas_per_atom * rand_x, sigmas_per_atom) / torch.sqrt(sigmas_norm_per_atom)
 
@@ -177,8 +184,13 @@ class CSPDiffusion(BaseModule):
     def sample(self, batch, step_lr = 1e-5):
 
         batch_size = batch.num_graphs
+        if self.use_spacegroup and self.use_ks:
+            ks_mask, ks_add = sg_to_ks_mask(batch.spacegroup)
+
         if self.use_ks:
             k_T = torch.randn([batch_size, 6]).to(self.device)
+            if self.use_spacegroup:
+                k_T = mask_ks(k_T, ks_mask, ks_add)
             l_T = lattice_ks_to_matrix_torch(k_T)
         else:
             l_T = torch.randn([batch_size, 3, 3]).to(self.device)
@@ -250,7 +262,7 @@ class CSPDiffusion(BaseModule):
 
 
             lattice_feats_t = k_t if self.use_ks else l_t
-            pred_lattice, pred_x = self.decoder(time_emb, batch.atom_types, x_t, lattice_feats_t, l_t, batch.num_atoms, batch.batch)
+            pred_lattice, pred_x = self.decoder(time_emb, batch.atom_types, x_t, lattice_feats_t, l_t, batch.num_atoms, batch.batch, batch.spacegroup)
 
             pred_x = pred_x * torch.sqrt(sigma_norm)
 
@@ -270,13 +282,15 @@ class CSPDiffusion(BaseModule):
             std_x = torch.sqrt((adjacent_sigma_x ** 2 * (sigma_x ** 2 - adjacent_sigma_x ** 2)) / (sigma_x ** 2))   
             lattice_feats_t_minus_05 = k_t_minus_05 if self.use_ks else l_t_minus_05
 
-            pred_lattice, pred_x = self.decoder(time_emb, batch.atom_types, x_t_minus_05, lattice_feats_t_minus_05, l_t_minus_05, batch.num_atoms, batch.batch)
+            pred_lattice, pred_x = self.decoder(time_emb, batch.atom_types, x_t_minus_05, lattice_feats_t_minus_05, l_t_minus_05, batch.num_atoms, batch.batch, batch.spacegroup)
 
             pred_x = pred_x * torch.sqrt(sigma_norm)
 
             x_t_minus_1 = x_t_minus_05 - step_size * pred_x + std_x * rand_x if not self.keep_coords else x_t
             if self.use_ks:
                 k_t_minus_1 = c0 * (k_t_minus_05 - c1 * pred_lattice) + sigmas * rand_k if not self.keep_lattice else k_t
+                if self.use_spacegroup and not self.keep_lattice:
+                    k_t_minus_1 = mask_ks(k_t_minus_1, ks_mask, ks_add)
                 l_t_minus_1 = lattice_ks_to_matrix_torch(k_t_minus_1) if not self.keep_lattice else l_t
             else:
                 l_t_minus_1 = c0 * (l_t_minus_05 - c1 * pred_lattice) + sigmas * rand_l if not self.keep_lattice else l_t

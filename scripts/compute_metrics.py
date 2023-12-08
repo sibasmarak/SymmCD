@@ -14,19 +14,24 @@ from pymatgen.core.structure import Structure
 from pymatgen.core.composition import Composition
 from pymatgen.core.lattice import Lattice
 from pymatgen.analysis.structure_matcher import StructureMatcher
+from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+
 from matminer.featurizers.site.fingerprint import CrystalNNFingerprint
 from matminer.featurizers.composition.composite import ElementProperty
 
 from pyxtal import pyxtal
 
 import pickle
-
+import warnings
+warnings.filterwarnings("ignore")
 import sys
 sys.path.append('.')
 
-from eval_utils import (
+from scripts.eval_utils import (
     smact_validity, structure_validity, CompScaler, get_fp_pdist,
-    load_config, load_data, get_crystals_list, prop_model_eval, compute_cov)
+    load_config, load_data, get_crystals_list, prop_model_eval, compute_cov, get_symmetry_info)
+
+from diffcsp.common.data_utils import get_symmetry_info
 
 CrystalNNFP = CrystalNNFingerprint.from_preset("ops")
 CompFP = ElementProperty.from_preset('magpie')
@@ -43,6 +48,8 @@ COV_Cutoffs = {
     'perovskite': {'struc': 0.2, 'comp': 4},
 }
 
+Crystal_Tol = 0.01
+
 
 class Crystal(object):
 
@@ -58,10 +65,12 @@ class Crystal(object):
             self.dict['atom_types'] = (np.argmax(self.atom_types, axis=-1) + 1)
             self.atom_types = (np.argmax(self.atom_types, axis=-1) + 1)
 
+
         self.get_structure()
         self.get_composition()
         self.get_validity()
         self.get_fingerprints()
+        self.get_symmetry()
 
 
     def get_structure(self):
@@ -70,7 +79,13 @@ class Crystal(object):
             self.invalid_reason = 'non_positive_lattice'
         if np.isnan(self.lengths).any() or np.isnan(self.angles).any() or  np.isnan(self.frac_coords).any():
             self.constructed = False
-            self.invalid_reason = 'nan_value'            
+            self.invalid_reason = 'nan_value'
+        elif np.isinf(self.lengths).any() or np.isinf(self.angles).any() or  np.isinf(self.frac_coords).any():
+            self.constructed = False
+            self.invalid_reason = 'inf_value'
+        elif (self.lengths > 1000).any():
+            self.constructed = False
+            self.invalid_reason = 'bad_value'
         else:
             try:
                 self.structure = Structure(
@@ -117,6 +132,19 @@ class Crystal(object):
             self.struct_fp = None
             return
         self.struct_fp = np.array(site_fps).mean(axis=0)
+
+    def get_symmetry(self):
+        if self.constructed:
+            spga = SpacegroupAnalyzer(self.structure, symprec=Crystal_Tol)
+            try:
+                self.spacegroup = spga.get_space_group_number()
+            except Exception:
+                self.spacegroup = 1
+            if self.spacegroup is None:
+                # Default to setting to 1
+                self.spacegroup = 1
+        else:
+            self.spacegroup = None
 
 
 class RecEval(object):
@@ -256,6 +284,13 @@ class GenEval(object):
         else:
             return {'wdist_prop': None}
 
+    def get_spacegroup_wdist(self):
+        pred_spacegroup = [c.spacegroup for c in self.valid_samples]
+        gt_spacegroup = [c.spacegroup for c in self.gt_crys]
+        wdist_spacegroup = wasserstein_distance(pred_spacegroup, gt_spacegroup)
+        return {'wdist_spacegroup': wdist_spacegroup}
+
+
     def get_coverage(self):
         cutoff_dict = COV_Cutoffs[self.eval_model_name]
         (cov_metrics_dict, combined_dist_dict) = compute_cov(
@@ -264,6 +299,7 @@ class GenEval(object):
             comp_cutoff=cutoff_dict['comp'])
         return cov_metrics_dict
 
+
     def get_metrics(self):
         metrics = {}
         metrics.update(self.get_validity())
@@ -271,11 +307,12 @@ class GenEval(object):
         metrics.update(self.get_prop_wdist())
         metrics.update(self.get_num_elem_wdist())
         metrics.update(self.get_coverage())
+        metrics.update(self.get_spacegroup_wdist())
         return metrics
 
 
 def get_file_paths(root_path, task, label='', suffix='pt'):
-    if args.label == '':
+    if label == '':
         out_name = f'eval_{task}.{suffix}'
     else:
         out_name = f'eval_{task}_{label}.{suffix}'
@@ -294,7 +331,8 @@ def get_crystal_array_list(file_path, batch_idx=0):
                 data['atom_types'][i],
                 data['lengths'][i],
                 data['angles'][i],
-                data['num_atoms'][i])
+                data['num_atoms'][i],
+                data['spacegroups'][i])
             crys_array_list.append(tmp_crys_array_list)
     elif batch_idx == -2:
         crys_array_list = get_crystals_list(
@@ -302,25 +340,27 @@ def get_crystal_array_list(file_path, batch_idx=0):
             data['atom_types'],
             data['lengths'],
             data['angles'],
-            data['num_atoms'])        
+            data['num_atoms'],
+            data['spacegroups'])
     else:
         crys_array_list = get_crystals_list(
             data['frac_coords'][batch_idx],
             data['atom_types'][batch_idx],
             data['lengths'][batch_idx],
             data['angles'][batch_idx],
-            data['num_atoms'][batch_idx])
+            data['num_atoms'][batch_idx],
+            data['spacegroups'][batch_idx])
 
     if 'input_data_batch' in data:
         batch = data['input_data_batch']
         if isinstance(batch, dict):
             true_crystal_array_list = get_crystals_list(
                 batch['frac_coords'], batch['atom_types'], batch['lengths'],
-                batch['angles'], batch['num_atoms'])
+                batch['angles'], batch['num_atoms'], batch['spacegroups'])
         else:
             true_crystal_array_list = get_crystals_list(
                 batch.frac_coords, batch.atom_types, batch.lengths,
-                batch.angles, batch.num_atoms)
+                batch.angles, batch.num_atoms, )
     else:
         true_crystal_array_list = None
 
@@ -348,19 +388,28 @@ def main(args):
 
         gen_file_path = get_file_paths(args.root_path, 'gen', args.label)
         crys_array_list, _ = get_crystal_array_list(gen_file_path, batch_idx = -2)
-        gen_crys = p_map(lambda x: Crystal(x), crys_array_list)
+        gen_crys = []
+        for i in tqdm(range(len(crys_array_list))):
+            gen_crys.append(Crystal(crys_array_list[i]))
+        print("gen_crys")
         if args.gt_file != '':
             csv = pd.read_csv(args.gt_file)
-            gt_crys = p_map(get_gt_crys_ori, csv['cif'])
+            gt_crys = []
+            for i in tqdm(range(len(csv['cif']))):
+                gt_crys.append(get_gt_crys_ori(csv['cif'][i]))
         else:
             # always ground gt_file is provided
             # if not provided then only use the reconstruction path to load true crystals
             recon_file_path = get_file_paths(args.root_path, 'recon', args.label)
             _, true_crystal_array_list = get_crystal_array_list(
                 recon_file_path)
-            gt_crys = p_map(lambda x: Crystal(x), true_crystal_array_list)
+            gt_crys = []
+            for i in tqdm(range(len(true_crystal_array_list))):
+                gt_crys.append  (Crystal(true_crystal_array_list[i]))
+        print("starting gen_evaluator")
         gen_evaluator = GenEval(
             gen_crys, gt_crys, eval_model_name=eval_model_name)
+        print("starting gen_evaluator.get_metrics")
         gen_metrics = gen_evaluator.get_metrics()
         all_metrics.update(gen_metrics)
 
