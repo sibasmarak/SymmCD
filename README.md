@@ -61,3 +61,10 @@ python scripts/compute_metrics --root_path <model_path> --tasks gen --gt_file da
 ```
 python scripts/sample.py --model_path <model_path> --save_path <save_path> --formula <formula> --num_evals <num_evals>
 ```
+
+### TODOs
+- [ ] Include a dummy element (null atom) at origin in the representative lattice (to retain invariances)
+- [ ] Include actual fractional coordinates (will not retain invariances and forms complete non-equivariant MPNN)
+- [ ] Add masks for lattice k-vector depending on space group
+- [ ] Add null atom types to have same number of representative across lattices
+- [ ] Update ab-initio generation (`diffusion_w_type.py`) to use k-vector

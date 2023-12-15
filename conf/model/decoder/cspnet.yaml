@@ -10,4 +10,5 @@ edge_style: fc
 max_neighbors: ${model.max_neighbors}
 cutoff: ${model.radius}
 ln: true
-ip: true
+ip: ${model.ip}
+use_ks: ${model.use_ks}

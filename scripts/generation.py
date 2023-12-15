@@ -94,6 +94,7 @@ def diffusion(loader, model, step_lr):
         if torch.cuda.is_available():
             batch.cuda()
         outputs, traj = model.sample(batch, step_lr = step_lr)
+        del traj
         frac_coords.append(outputs['frac_coords'].detach().cpu())
         num_atoms.append(outputs['num_atoms'].detach().cpu())
         atom_types.append(outputs['atom_types'].detach().cpu())
@@ -118,15 +119,19 @@ class SampleDataset(Dataset):
         self.num_atoms = np.random.choice(len(self.distribution), total_num, p = self.distribution)
         self.is_carbon = dataset == 'carbon'
 
+        self.additional_test = torch.load("/home/mila/s/siba-smarak.panigrahi/DiffCSP/data/perov_5/test_ori.pt")
+        self.additional_test_len = len(self.additional_test)
     def __len__(self) -> int:
         return self.total_num
 
     def __getitem__(self, index):
-
-        num_atom = self.num_atoms[index]
+        # better way to obtain number of atoms/representatives rather than defining distribution
+        num_atom = self.additional_test[index%self.additional_test_len]['graph_arrays'][-1]
         data = Data(
             num_atoms=torch.LongTensor([num_atom]),
             num_nodes=num_atom,
+            spacegroup=self.additional_test[index%self.additional_test_len]['spacegroup'],
+            sg_condition=self.additional_test[index%self.additional_test_len]['sg_binary'],
         )
         if self.is_carbon:
             data.atom_types = torch.LongTensor([6] * num_atom)

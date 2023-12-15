@@ -63,7 +63,7 @@ class CrystDataset(Dataset):
 
         # scaler is set in DataModule set stage
         prop = self.scaler.transform(data_dict[self.prop])
-        (frac_coords, atom_types, lengths, angles, edge_indices,
+        (frac_coords, atom_types, lengths, angles, ks, edge_indices,
          to_jimages, num_atoms) = data_dict['graph_arrays']
 
         # atom_coords are fractional coordinates
@@ -74,6 +74,7 @@ class CrystDataset(Dataset):
             atom_types=torch.LongTensor(atom_types),
             lengths=torch.Tensor(lengths).view(1, -1),
             angles=torch.Tensor(angles).view(1, -1),
+            ks=torch.Tensor(ks).view(1, -1),
             edge_index=torch.LongTensor(
                 edge_indices.T).contiguous(),  # shape (2, num_edges)
             to_jimages=torch.LongTensor(to_jimages),
@@ -87,7 +88,9 @@ class CrystDataset(Dataset):
             data.spacegroup = torch.LongTensor([data_dict['spacegroup']])
             data.ops = torch.Tensor(data_dict['wyckoff_ops'])
             data.anchor_index = torch.LongTensor(data_dict['anchors'])
-            data.operations = data_dict['operations']
+
+            data.sg_condition = torch.Tensor(data_dict['sg_binary'])
+            data.site_symm = torch.Tensor(data_dict['site_symm_binary'])
 
         if self.use_pos_index:
             pos_dic = {}
@@ -128,7 +131,7 @@ class TensorCrystDataset(Dataset):
     def __getitem__(self, index):
         data_dict = self.cached_data[index]
 
-        (frac_coords, atom_types, lengths, angles, edge_indices,
+        (frac_coords, atom_types, lengths, angles, ks, edge_indices,
          to_jimages, num_atoms) = data_dict['graph_arrays']
 
         # atom_coords are fractional coordinates
@@ -139,6 +142,7 @@ class TensorCrystDataset(Dataset):
             atom_types=torch.LongTensor(atom_types),
             lengths=torch.Tensor(lengths).view(1, -1),
             angles=torch.Tensor(angles).view(1, -1),
+            ks=torch.Tensor(ks).view(1, -1),
             edge_index=torch.LongTensor(
                 edge_indices.T).contiguous(),  # shape (2, num_edges)
             to_jimages=torch.LongTensor(to_jimages),

@@ -162,3 +162,4 @@ output/
 *.pt
 
 cdvae
+.vscode/

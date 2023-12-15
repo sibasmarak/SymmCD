@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import networkx as nx
+import scipy
 import torch
 import copy
 import itertools
@@ -70,30 +71,55 @@ EPSILON = 1e-5
 
 chemical_symbols = [
     # 0
-    'X',
+    'X', # 1
     # 1
-    'H', 'He',
+    'H', 'He', # 3
     # 2
-    'Li', 'Be', 'B', 'C', 'N', 'O', 'F', 'Ne',
+    'Li', 'Be', 'B', 'C', 'N', 'O', 'F', 'Ne', # 11
     # 3
-    'Na', 'Mg', 'Al', 'Si', 'P', 'S', 'Cl', 'Ar',
+    'Na', 'Mg', 'Al', 'Si', 'P', 'S', 'Cl', 'Ar', # 19
     # 4
     'K', 'Ca', 'Sc', 'Ti', 'V', 'Cr', 'Mn', 'Fe', 'Co', 'Ni', 'Cu', 'Zn',
-    'Ga', 'Ge', 'As', 'Se', 'Br', 'Kr',
+    'Ga', 'Ge', 'As', 'Se', 'Br', 'Kr', # 37
     # 5
     'Rb', 'Sr', 'Y', 'Zr', 'Nb', 'Mo', 'Tc', 'Ru', 'Rh', 'Pd', 'Ag', 'Cd',
-    'In', 'Sn', 'Sb', 'Te', 'I', 'Xe',
+    'In', 'Sn', 'Sb', 'Te', 'I', 'Xe', # 55
     # 6
     'Cs', 'Ba', 'La', 'Ce', 'Pr', 'Nd', 'Pm', 'Sm', 'Eu', 'Gd', 'Tb', 'Dy',
     'Ho', 'Er', 'Tm', 'Yb', 'Lu',
     'Hf', 'Ta', 'W', 'Re', 'Os', 'Ir', 'Pt', 'Au', 'Hg', 'Tl', 'Pb', 'Bi',
-    'Po', 'At', 'Rn',
+    'Po', 'At', 'Rn', # 86
     # 7
     'Fr', 'Ra', 'Ac', 'Th', 'Pa', 'U', 'Np', 'Pu', 'Am', 'Cm', 'Bk',
     'Cf', 'Es', 'Fm', 'Md', 'No', 'Lr',
     'Rf', 'Db', 'Sg', 'Bh', 'Hs', 'Mt', 'Ds', 'Rg', 'Cn', 'Nh', 'Fl', 'Mc',
-    'Lv', 'Ts', 'Og']
+    'Lv', 'Ts', 'Og'] # 118
 
+B_MATRICES = np.zeros((6, 3, 3))
+B_MATRICES[0, 0, 1] = B_MATRICES[0, 1, 0] = 1
+B_MATRICES[1, 0, 2] = B_MATRICES[1, 2, 0] = 1
+B_MATRICES[2, 1, 2] = B_MATRICES[2, 2, 1] = 1
+B_MATRICES[3, 0, 0] = 1
+B_MATRICES[3, 1, 1] = -1
+B_MATRICES[4, 0, 0] = B_MATRICES[4, 1, 1] = 1
+B_MATRICES[4, 2, 2] = -2
+B_MATRICES[5, 0, 0] =  B_MATRICES[5, 1, 1]  = B_MATRICES[5, 2, 2]  = 1
+
+def lattice_from_ks(ks):
+    ks = ks.reshape(6, 1, 1)
+    S = np.multiply(ks, B_MATRICES).sum(0)
+    L = scipy.linalg.expm(S)
+    return L
+
+def frobenius_prod(A, B):
+    return np.trace(A.T @ B)
+
+def lattice_to_ks(L):
+    ks = np.zeros(6)
+    S = scipy.linalg.logm(L)
+    for i in range(6):
+        ks[i] = frobenius_prod(S, B_MATRICES[i]) / frobenius_prod(B_MATRICES[i], B_MATRICES[i])
+    return ks
 
 CrystalNN = local_env.CrystalNN(
     distance_cutoffs=None, x_diff_weight=-1, porous_adjustment=False)
@@ -131,31 +157,134 @@ def refine_spacegroup(crystal, tol=0.01):
     )
     return crystal, space_group
 
+def get_site_symmetry_binary_repr(notation:str, label:str = None):
+    """Get the binary representation of the site symmetry."""
+
+    # split with respect to the ' ' character, ignore the crystal lattice type
+    if not label: notation = notation.split(' ')[1:]
+    else: notation = notation.split(' ')
+
+    if len(notation) < 3:
+        # add '1' to the notation to make it length 3
+        notation = notation + ['1'] * (3 - len(notation))
+
+    axis_wise_binary_repr = []
+    for axis_symm in notation:
+        binary_repr = torch.zeros(22)
+        # initialize the binary representation
+        translation = 0
+        rotation = 1
+        reflection = 0
+        inversion = 0
+        glide = 0
+
+
+        # string processing
+        if '-' in axis_symm: inversion = True # inversion
+        if '/' in axis_symm or 'm' in axis_symm: reflection = 1 # mirror plane
+
+        # screw axis
+        if '21' in axis_symm: 
+            rotation = 2
+            translation = 1
+        if '31' in axis_symm: 
+            rotation = 3
+            translation = 1
+        if '32' in axis_symm: 
+            rotation = 3
+            translation = 2
+        if '41' in axis_symm:
+            rotation = 4
+            translation = 1
+        if '42' in axis_symm:
+            rotation = 4
+            translation = 2
+        if '43' in axis_symm:
+            rotation = 4
+            translation = 3
+        if '61' in axis_symm:
+            rotation = 6
+            translation = 1
+        if '62' in axis_symm:
+            rotation = 6
+            translation = 2
+        if '63' in axis_symm:
+            rotation = 6
+            translation = 3
+        if '64' in axis_symm:
+            rotation = 6
+            translation = 4
+        if '65' in axis_symm:
+            rotation = 6
+            translation = 5
+
+        screw_axis = True if translation else False
+
+        # rotation axis
+        if not screw_axis:
+            if '2' in axis_symm: rotation = 2
+            if '3' in axis_symm: rotation = 3
+            if '4' in axis_symm: rotation = 4
+            if '6' in axis_symm: rotation = 6
+
+        # glide plane
+        if not reflection:
+            if 'a' in axis_symm: glide = 1
+            if 'b' in axis_symm: glide = 2
+            if 'c' in axis_symm: glide = 3
+            if 'n' in axis_symm: glide = 4
+            if 'd' in axis_symm: glide = 5
+            if 'e' in axis_symm: glide = 6
+
+        # fill the binary representation in one-hot fashion
+        # binary_repr = [0, 1, 1, 2, 3, 4, 6, 0, 1, 0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5, 6] # [inversion (2), rotation (5), reflection (2), translation (6), glide (7)]
+        binary_repr[0 + inversion] = 1
+        if rotation <= 4: binary_repr[1 + rotation] = 1
+        elif rotation == 6: binary_repr[6] = 1
+        binary_repr[7 + reflection] = 1
+        binary_repr[9 + translation] = 1
+        binary_repr[15 + glide] = 1
+
+        axis_wise_binary_repr.append(binary_repr)
+
+    return torch.cat(axis_wise_binary_repr, dim=0)
+
 
 def get_symmetry_info(crystal, tol=0.01):
     spga = SpacegroupAnalyzer(crystal, symprec=tol)
     crystal = spga.get_refined_structure()
-    c = pyxtal()
+    pyx = pyxtal()
     try:
-        c.from_seed(crystal, tol=0.01)
+        pyx.from_seed(crystal, tol=0.01)
     except:
-        c.from_seed(crystal, tol=0.0001)
-    space_group = c.group.number
+        pyx.from_seed(crystal, tol=0.0001)
+    space_group = pyx.group.number
     species = []
     anchors = []
     matrices = []
     coords = []
-    for site in c.atom_sites:
+    hmwyckoffs = []
+    labels = []
+    for site in pyx.atom_sites:
         specie = site.specie
         anchor = len(matrices)
         coord = site.position
-        species.append(specie)
+        
         coords.append(coord)
-        for syms in site.wp:
-            # species.append(specie) # only keep track of representatives
-            matrices.append(syms.affine_matrix)
-            # coords.append(syms.operate(coord)) # only keep track of representatives
-            anchors.append(anchor)
+        species.append(specie)
+        matrices.append(site.wp[0].affine_matrix)
+        anchors.append(anchor)
+
+        site.wp.get_site_symmetry() # initialize the wyckoff position
+        hmwyckoffs.append(site.wp.site_symm) # HM notation of wyckoff position
+        labels.append(site.wp.get_label()) # label of wyckoff position (1a, 3a, etc.)
+
+        # old code from DiffCSP
+        # for syms in site.wp:
+        #     species.append(specie)
+        #     matrices.append(syms.affine_matrix)
+        #     coords.append(syms.operate(coord))
+        #     anchors.append(anchor)
     anchors = np.array(anchors)
     matrices = np.array(matrices)
     coords = np.array(coords) % 1.
@@ -163,14 +292,12 @@ def get_symmetry_info(crystal, tol=0.01):
         'anchors':anchors,
         'wyckoff_ops':matrices,
         'spacegroup':space_group,
-        'operations':c.group[0], # symmetry operations for general Wyckoff position
-        # to find all the positions due to the space group
-        # coords = [syms.operate(c.atom_sites[1].position) for syms in c.group[0]]
-        # coords = np.array(coords)
-        # uniq_coords = np.unique(coords + (coords < 0), axis=0)
+        'hmnotation':pyx.atom_sites[0].wp.get_hm_symbol(),
+        'hmwyckoffs':hmwyckoffs,
+        'labels': labels,
     }
     crystal = Structure(
-        lattice=Lattice.from_parameters(*np.array(c.lattice.get_para(degree=True))),
+        lattice=Lattice.from_parameters(*np.array(pyx.lattice.get_para(degree=True))),
         species=species,
         coords=coords,
         coords_are_cartesian=False,
@@ -203,6 +330,8 @@ def build_crystal_graph(crystal, graph_method='crystalnn'):
     assert np.allclose(crystal.lattice.matrix,
                        lattice_params_to_matrix(*lengths, *angles))
 
+    ks = lattice_to_ks(crystal.lattice.matrix) # Note: may correspond to a rotated lattice
+
     edge_indices, to_jimages = [], []
     if graph_method != 'none':
         for i, j, to_jimage in crystal_graph.graph.edges(data='to_jimage'):
@@ -217,7 +346,7 @@ def build_crystal_graph(crystal, graph_method='crystalnn'):
     to_jimages = np.array(to_jimages)
     num_atoms = atom_types.shape[0]
 
-    return frac_coords, atom_types, lengths, angles, edge_indices, to_jimages, num_atoms
+    return frac_coords, atom_types, lengths, angles, ks, edge_indices, to_jimages, num_atoms
 
 
 def abs_cap(val, max_abs_val=1):
@@ -257,6 +386,14 @@ def lattice_params_to_matrix(a, b, c, alpha, beta, gamma):
     vector_c = [0.0, 0.0, float(c)]
     return np.array([vector_a, vector_b, vector_c])
 
+def lattice_ks_to_matrix_torch(ks):
+    """Converts lattice from k-space vectors to matrix.
+    Args:
+        ks: torch.Tensor of shape (N, 6)
+    """
+    S = torch.einsum('bij,nb->nij', torch.tensor(B_MATRICES, device=ks.device, dtype=ks.dtype), ks)
+    L = torch.matrix_exp(S)
+    return L
 
 def lattice_params_to_matrix_torch(lengths, angles):
     """Batched torch version to compute lattice matrix from params.
@@ -1165,10 +1302,19 @@ def process_one(row, niggli, primitive, graph_method, prop_list, use_space_group
     crystal_str = row['cif']
     crystal = build_crystal(
         crystal_str, niggli=niggli, primitive=primitive)
+    lattice_matrix = crystal.lattice.matrix
+    lattice_ks = lattice_to_ks(lattice_matrix)
     result_dict = {}
     if use_space_group:
         crystal, sym_info = get_symmetry_info(crystal, tol = tol)
         result_dict.update(sym_info)
+
+        # obtain the HM binary representation for space group and site symmetries
+        sg_repr = get_site_symmetry_binary_repr(sym_info['hmnotation'])
+        site_repr = [get_site_symmetry_binary_repr(hmnot, label=lbl) for hmnot, lbl in zip(sym_info['hmwyckoffs'], sym_info['labels'])]
+        result_dict['sg_binary'] = sg_repr
+        result_dict['site_symm_binary'] = torch.stack(site_repr)
+
     else:
         result_dict['spacegroup'] = 1
     graph_arrays = build_crystal_graph(crystal, graph_method)
@@ -1176,7 +1322,8 @@ def process_one(row, niggli, primitive, graph_method, prop_list, use_space_group
     result_dict.update({
         'mp_id': row['material_id'],
         'cif': crystal_str,
-        'graph_arrays': graph_arrays
+        'graph_arrays': graph_arrays,
+        'lattice_ks': lattice_ks
     })
     result_dict.update(properties)
     return result_dict
@@ -1196,6 +1343,11 @@ def preprocess(input_file, num_workers, niggli, primitive, graph_method,
         [use_space_group] * len(df),
         [tol] * len(df),
         num_cpus=num_workers)
+
+    # unordered_results = []
+    # for r, n, p, gm, pl, usg, t in zip([df.iloc[idx] for idx in range(len(df))], [niggli] * len(df), [primitive] * len(df), [graph_method] * len(df), [prop_list] * len(df), [use_space_group] * len(df), [tol] * len(df)):
+    #     result_dict = process_one(r, n, p, gm, pl, usg, t)
+    #     unordered_results.append(result_dict)
 
     mpid_to_results = {result['mp_id']: result for result in unordered_results}
     ordered_results = [mpid_to_results[df.iloc[idx]['material_id']]

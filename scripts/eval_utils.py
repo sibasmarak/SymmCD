@@ -90,6 +90,8 @@ def load_model(model_path, load_data=False, testing=True):
             from diffcsp.pl_modules.diffusion import CSPDiffusion as Model
         elif cfg.model._target_ == "diffcsp.pl_modules.diffusion_w_type.CSPDiffusion":
             from diffcsp.pl_modules.diffusion_w_type import CSPDiffusion as Model
+        elif cfg.model._target_ == "diffcsp.pl_modules.diffusion_w_site_symm.CSPDiffusion":
+            from diffcsp.pl_modules.diffusion_w_site_symm import CSPDiffusion as Model
         elif cfg.model._target_ == "diffcsp.pl_modules.model.CrystGNN_Supervise":
             from diffcsp.pl_modules.model import CrystGNN_Supervise as Model
         model = Model.load_from_checkpoint(ckpt, strict=False)

@@ -39,6 +39,7 @@ def diffusion(loader, model, num_evals, step_lr = 1e-5):
 
             print(f'batch {idx} / {len(loader)}, sample {eval_idx} / {num_evals}')
             outputs, traj = model.sample(batch, step_lr = step_lr)
+            del traj
             batch_frac_coords.append(outputs['frac_coords'].detach().cpu())
             batch_num_atoms.append(outputs['num_atoms'].detach().cpu())
             batch_atom_types.append(outputs['atom_types'].detach().cpu())
