@@ -116,7 +116,7 @@ def load_model(model_path, load_data=False, testing=True):
 
 
 def get_crystals_list(
-        frac_coords, atom_types, lengths, angles, num_atoms, spacegroups):
+        frac_coords, atom_types, lengths, angles, num_atoms, spacegroups=None):
     """
     args:
         frac_coords: (num_atoms, 3)
@@ -135,14 +135,17 @@ def get_crystals_list(
         cur_atom_types = atom_types.narrow(0, start_idx, num_atom)
         cur_lengths = lengths[batch_idx]
         cur_angles = angles[batch_idx]
-        cur_spacegroups = spacegroups[batch_idx]
+        if spacegroups is not None:
+            cur_spacegroups = spacegroups[batch_idx].detach().cpu().numpy()
+        else:
+            cur_spacegroups = np.zeros(num_atom)
 
         crystal_array_list.append({
             'frac_coords': cur_frac_coords.detach().cpu().numpy(),
             'atom_types': cur_atom_types.detach().cpu().numpy(),
             'lengths': cur_lengths.detach().cpu().numpy(),
             'angles': cur_angles.detach().cpu().numpy(),
-            'spacegroups': cur_spacegroups.detach().cpu().numpy(),
+            'spacegroups': cur_spacegroups
         })
         start_idx = start_idx + num_atom
     return crystal_array_list

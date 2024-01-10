@@ -17,7 +17,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from torch_geometric.data import Data, Batch, DataLoader
 from torch.utils.data import Dataset
-from scripts.eval_utils import load_model, lattices_to_params_shape, get_crystals_list
+from eval_utils import load_model, lattices_to_params_shape, get_crystals_list
 from diffcsp.common.constants import SpaceGroupDist
 
 from pymatgen.core.structure import Structure
@@ -32,6 +32,19 @@ from p_tqdm import p_map
 import pdb
 
 import os
+
+def get_num_atoms_per_sg(dataset):
+    if dataset == 'perov':
+        dataset_name = 'perov_4'
+    elif dataset == 'carbon':
+        dataset_name = 'carbon_24'
+    elif dataset == 'mp':
+        dataset_name = 'mp_20'
+    else:
+        raise NotImplementedError
+    dist_file = f'./data/{dataset_name}/num_atoms_per_sg.csv'
+    return np.loadtxt(dist_file, delimiter=',')
+    
 
 train_dist = {
     'perov' : [0, 0, 0, 0, 0, 1],
@@ -83,7 +96,7 @@ train_dist = {
             0.08995430424528301]
 }
 
-def diffusion(loader, model, step_lr):
+def diffusion(loader, model, step_lr, use_sg=False):
 
     frac_coords = []
     num_atoms = []
@@ -100,7 +113,8 @@ def diffusion(loader, model, step_lr):
         num_atoms.append(outputs['num_atoms'].detach().cpu())
         atom_types.append(outputs['atom_types'].detach().cpu())
         lattices.append(outputs['lattices'].detach().cpu())
-        spacegroups.append(outputs['spacegroup'].detach().cpu())
+        if use_sg:
+            spacegroups.append(outputs['spacegroup'].detach().cpu())
 
 
     frac_coords = torch.cat(frac_coords, dim=0)
@@ -108,7 +122,10 @@ def diffusion(loader, model, step_lr):
     atom_types = torch.cat(atom_types, dim=0)
     lattices = torch.cat(lattices, dim=0)
     lengths, angles = lattices_to_params_shape(lattices)
-    spacegroups = torch.cat(spacegroups, dim=0)
+    if len(spacegroups) > 0:
+        spacegroups = torch.cat(spacegroups, dim=0)
+    else:
+        spacegroups = None
 
     return (
         frac_coords, atom_types, lattices, lengths, angles, num_atoms, spacegroups
@@ -116,14 +133,20 @@ def diffusion(loader, model, step_lr):
 
 class SampleDataset(Dataset):
 
-    def __init__(self, dataset, total_num):
+    def __init__(self, dataset, total_num, use_num_atoms_per_sg = False):
         super().__init__()
         self.total_num = total_num
         self.distribution = train_dist[dataset]
         self.sg_distribution = SpaceGroupDist[dataset]
-
-        self.num_atoms = np.random.choice(len(self.distribution), total_num, p = self.distribution)
-        self.sg = np.random.choice(len(self.sg_distribution), total_num, p = self.sg_distribution)
+        if use_num_atoms_per_sg:
+            num_atoms_per_sg = get_num_atoms_per_sg(dataset)
+            num_atoms_per_sg = num_atoms_per_sg / num_atoms_per_sg.sum()
+            choices = np.random.choice(num_atoms_per_sg.shape[0]*num_atoms_per_sg.shape[1], total_num, p = num_atoms_per_sg.reshape(-1))
+            self.num_atoms = choices % num_atoms_per_sg.shape[1]
+            self.sg = choices // num_atoms_per_sg.shape[1]
+        else:
+            self.sg = np.random.choice(len(self.sg_distribution), total_num, p = self.sg_distribution)
+            self.num_atoms = np.random.choice(len(self.distribution), total_num, p = self.distribution)
         self.is_carbon = dataset == 'carbon'
 
     def __len__(self) -> int:
@@ -147,17 +170,18 @@ def main(args):
     model_path = Path(args.model_path)
     model, _, cfg = load_model(
         model_path, load_data=False)
+    use_sg = cfg.model.use_spacegroup
 
     if torch.cuda.is_available():
         model.to('cuda')
 
     print('Evaluate the diffusion model.')
 
-    test_set = SampleDataset(args.dataset, args.batch_size * args.num_batches_to_samples)
+    test_set = SampleDataset(args.dataset, args.batch_size * args.num_batches_to_samples, args.num_atoms_per_sg)
     test_loader = DataLoader(test_set, batch_size = args.batch_size)
 
     start_time = time.time()
-    (frac_coords, atom_types, lattices, lengths, angles, num_atoms, spacegroups) = diffusion(test_loader, model, args.step_lr)
+    (frac_coords, atom_types, lattices, lengths, angles, num_atoms, spacegroups) = diffusion(test_loader, model, args.step_lr, use_sg)
 
     if args.label == '':
         gen_out_name = 'eval_gen.pt'
@@ -184,6 +208,7 @@ if __name__ == '__main__':
     parser.add_argument('--num_batches_to_samples', default=20, type=int)
     parser.add_argument('--batch_size', default=500, type=int)
     parser.add_argument('--label', default='')
+    parser.add_argument('--num_atoms_per_sg', default=False, type=bool)
     args = parser.parse_args()
 
 

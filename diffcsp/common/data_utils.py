@@ -206,11 +206,11 @@ def get_symmetry_info(crystal, tol=0.01, use_representatives=False):
         specie = site.specie
         anchor = len(matrices)
         coord = site.position
-        if not use_representatives:
+        if use_representatives:
             species.append(specie)
             coords.append(coord)
         for syms in site.wp:
-            if use_representatives:
+            if not use_representatives:
                 species.append(specie) # only keep track of representatives
                 coords.append(syms.operate(coord)) # only keep track of representatives
             matrices.append(syms.affine_matrix)

@@ -39,7 +39,8 @@ class CSPLayer(nn.Module):
         ip=True,
         use_ks=False,
         cond_sg=False,
-        sg_dim=10
+        sg_dim=10,
+        use_coords=False
     ):
         super(CSPLayer, self).__init__()
 
@@ -52,6 +53,8 @@ class CSPLayer(nn.Module):
             self.sg_dim = sg_dim
         else:
             self.sg_dim = 0
+        self.use_coords = use_coords
+        coord_dim = self.dis_dim if self.use_coords else 0
         assert self.ip != self.use_ks # Cannot use both inner product representation and k representation
         self.lattice_dim = 9 if self.ip else 6
         if dis_emb is not None:
@@ -59,12 +62,12 @@ class CSPLayer(nn.Module):
         if self.cond_sg:
             self.sg_emb = nn.Embedding(N_SPACEGROUPS + 1, self.sg_dim)
         self.edge_mlp = nn.Sequential(
-            nn.Linear(hidden_dim * 2 + self.lattice_dim + self.dis_dim + self.sg_dim, hidden_dim),
+            nn.Linear(hidden_dim * 2 + self.lattice_dim + self.dis_dim + self.sg_dim + coord_dim*2, hidden_dim),
             act_fn,
             nn.Linear(hidden_dim, hidden_dim),
             act_fn)
         self.node_mlp = nn.Sequential(
-            nn.Linear(hidden_dim * 2 + self.sg_dim, hidden_dim),
+            nn.Linear(hidden_dim * 2 + self.sg_dim + coord_dim, hidden_dim),
             act_fn,
             nn.Linear(hidden_dim, hidden_dim),
             act_fn)
@@ -111,6 +114,8 @@ class CSPLayer(nn.Module):
         node_input = node_features
         if self.ln:
             node_features = self.layer_norm(node_input)
+        if self.use_coords:
+            node_features = torch.cat([node_features, frac_coords], dim=1)
         edge_features = self.edge_model(node_features, frac_coords, lattice_feats, edge_index, edge2graph, frac_diff, sg_emb)
         node_output = self.node_model(node_features, edge_features, edge_index, node2graph, sg_emb)
         return node_input + node_output
@@ -135,7 +140,8 @@ class CSPNet(nn.Module):
         use_ks=False,
         smooth = False,
         pred_type = False,
-        cond_sg = False
+        cond_sg = False,
+        use_coords = False
     ):
         super(CSPNet, self).__init__()
 
@@ -143,6 +149,7 @@ class CSPNet(nn.Module):
         self.smooth = smooth
         self.use_ks = use_ks
         self.cond_sg = cond_sg
+        self.use_coords = use_coords
         assert self.use_ks != self.ip # Cannot use both inner product representation and k representation
         if self.smooth:
             self.node_embedding = nn.Linear(max_atoms, hidden_dim)
@@ -157,7 +164,7 @@ class CSPNet(nn.Module):
             self.dis_emb = None
         for i in range(0, num_layers):
             self.add_module(
-                "csp_layer_%d" % i, CSPLayer(hidden_dim, self.act_fn, self.dis_emb, ln=ln, ip=ip, use_ks=use_ks, cond_sg=cond_sg)
+                "csp_layer_%d" % i, CSPLayer(hidden_dim, self.act_fn, self.dis_emb, ln=ln, ip=ip, use_ks=use_ks, cond_sg=cond_sg, use_coords=use_coords)
             )            
         self.num_layers = num_layers
         self.coord_out = nn.Linear(hidden_dim, 3, bias = False)
@@ -300,6 +307,7 @@ class CSPNet(nn.Module):
         t_per_atom = t.repeat_interleave(num_atoms, dim=0)
         node_features = torch.cat([node_features, t_per_atom], dim=1)
         node_features = self.atom_latent_emb(node_features)
+
 
         for i in range(0, self.num_layers):
             node_features = self._modules["csp_layer_%d" % i](node_features, frac_coords, lattice_feats, edges, edge2graph, node2graph, 

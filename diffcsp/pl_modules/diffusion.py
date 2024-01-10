@@ -85,6 +85,7 @@ class CSPDiffusion(BaseModule):
         self.use_ks = self.hparams.use_ks
         self.use_spacegroup = self.hparams.use_spacegroup
         self.condition_spacegroup = self.hparams.condition_spacegroup
+        self.use_coords = self.hparams.use_coords
 
 
 
@@ -165,7 +166,7 @@ class CSPDiffusion(BaseModule):
         tar_x = d_log_p_wrapped_normal(sigmas_per_atom * rand_x, sigmas_per_atom) / torch.sqrt(sigmas_norm_per_atom)
 
         if self.use_ks:
-            loss_lattice = F.mse_loss(pred_lattice, rand_ks)
+            loss_lattice = F.mse_loss(pred_lattice, ks_mask*rand_ks)
         else:
             loss_lattice = F.mse_loss(pred_lattice, rand_l)
         loss_coord = F.mse_loss(pred_x, tar_x)

@@ -85,6 +85,7 @@ class CSPDiffusion(BaseModule):
         self.use_ks = self.hparams.use_ks
         self.use_spacegroup = self.hparams.use_spacegroup
         self.condition_spacegroup = self.hparams.condition_spacegroup
+        self.use_coords = self.hparams.use_coords
 
     def forward(self, batch):
 
@@ -146,7 +147,7 @@ class CSPDiffusion(BaseModule):
 
         # pred_x and tar_x should be symmetrized
         if self.use_ks:
-            loss_lattice = F.mse_loss(pred_lattice, rand_ks) # 1024,6
+            loss_lattice = F.mse_loss(pred_lattice, ks_mask*rand_ks) # 1024,6
         else:
             loss_lattice = F.mse_loss(pred_lattice, rand_l) # 1024,3,3    
         loss_coord = F.mse_loss(pred_x, tar_x) # 4604, 3

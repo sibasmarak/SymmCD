@@ -11,6 +11,7 @@ use_ks: false
 ip: true
 use_spacegroup: false
 condition_spacegroup: false
+use_coords: false
 
 defaults:
   - decoder: cspnet

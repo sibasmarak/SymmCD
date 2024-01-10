@@ -13,3 +13,4 @@ use_ks: ${model.use_ks}
 ln: true
 ip: ${model.ip}
 cond_sg: ${model.condition_spacegroup}
+use_coords: ${model.use_coords}

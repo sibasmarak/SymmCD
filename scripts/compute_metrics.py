@@ -86,6 +86,15 @@ class Crystal(object):
         elif (self.lengths > 1000).any():
             self.constructed = False
             self.invalid_reason = 'bad_value'
+        elif (self.angles >= 180).any() or (self.angles <= 0).any():
+            self.constructed = False
+            self.invalid_reason = 'bad_value'
+        elif (self.frac_coords > 1).any() or (self.frac_coords < 0).any():
+            self.constructed = False
+            self.invalid_reason = 'bad_value'
+        elif self.lengths.min() < 1:
+            self.constructed = False
+            self.invalid_reason = 'bad_value'
         else:
             try:
                 self.structure = Structure(
