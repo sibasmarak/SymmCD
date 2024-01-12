@@ -4,7 +4,7 @@ import sys
 sys.path.append('.')
 import hydra
 import numpy as np
-import torch
+import torch, os
 import omegaconf
 import pytorch_lightning as pl
 from hydra.core.hydra_config import HydraConfig
@@ -27,7 +27,7 @@ import wandb
 # For more details, read https://pytorch.org/docs/stable/generated/torch.set_float32_matmul_precision.html#torch.set_float32_matmul_precision
 torch.set_float32_matmul_precision('high')
 
-def build_callbacks(cfg: DictConfig) -> List[Callback]:
+def build_callbacks(cfg: DictConfig, hydra_dir: Path) -> List[Callback]:
     callbacks: List[Callback] = []
 
     if "lr_monitor" in cfg.logging:
@@ -54,7 +54,7 @@ def build_callbacks(cfg: DictConfig) -> List[Callback]:
         hydra.utils.log.info("Adding callback <ModelCheckpoint>")
         callbacks.append(
             ModelCheckpoint(
-                dirpath=Path(HydraConfig.get().run.dir),
+                dirpath=hydra_dir, # Path(HydraConfig.get().run.dir),
                 monitor=cfg.train.monitor_metric,
                 mode=cfg.train.monitor_metric_mode,
                 save_top_k=cfg.train.model_checkpoints.save_top_k,
@@ -89,9 +89,6 @@ def run(cfg: DictConfig) -> None:
         # Switch wandb mode to offline to prevent online logging
         cfg.logging.wandb.mode = "offline"
 
-    # Hydra run directory
-    hydra_dir = Path(HydraConfig.get().run.dir)
-
     # Instantiate datamodule
     hydra.utils.log.info(f"Instantiating <{cfg.data.datamodule._target_}>")
     datamodule: pl.LightningDataModule = hydra.utils.instantiate(
@@ -107,17 +104,7 @@ def run(cfg: DictConfig) -> None:
         logging=cfg.logging,
         _recursive_=False,
     )
-
-    # Pass scaler from datamodule to model
-    hydra.utils.log.info(f"Passing scaler from datamodule to model <{datamodule.scaler}>")
-    if datamodule.scaler is not None:
-        model.lattice_scaler = datamodule.lattice_scaler.copy()
-        model.scaler = datamodule.scaler.copy()
-    torch.save(datamodule.lattice_scaler, hydra_dir / 'lattice_scaler.pt')
-    torch.save(datamodule.scaler, hydra_dir / 'prop_scaler.pt')
-    # Instantiate the callbacks
-    callbacks: List[Callback] = build_callbacks(cfg=cfg)
-
+            
     # Logger instantiation/configuration
     wandb_logger = None
     if "wandb" in cfg.logging:
@@ -134,6 +121,22 @@ def run(cfg: DictConfig) -> None:
             log=cfg.logging.wandb_watch.log,
             log_freq=cfg.logging.wandb_watch.log_freq,
         )
+        
+    # Hydra run directory (else part will be true if wandb is set offline)
+    hydra_dir = Path(HydraConfig.get().run.dir) / wandb_logger.experiment.name if wandb_logger is not None else Path(HydraConfig.get().run.dir)
+    if not os.path.exists(hydra_dir):
+        os.makedirs(hydra_dir)
+    hydra.utils.log.info(f"Hydra run directory: {hydra_dir}")
+        
+    # Pass scaler from datamodule to model
+    hydra.utils.log.info(f"Passing scaler from datamodule to model <{datamodule.scaler}>")
+    if datamodule.scaler is not None:
+        model.lattice_scaler = datamodule.lattice_scaler.copy()
+        model.scaler = datamodule.scaler.copy()
+    torch.save(datamodule.lattice_scaler, hydra_dir / 'lattice_scaler.pt')
+    torch.save(datamodule.scaler, hydra_dir / 'prop_scaler.pt')
+    # Instantiate the callbacks
+    callbacks: List[Callback] = build_callbacks(cfg=cfg, hydra_dir=hydra_dir)
 
     # Store the YaML config separately into the wandb dir
     yaml_conf: str = OmegaConf.to_yaml(cfg=cfg)

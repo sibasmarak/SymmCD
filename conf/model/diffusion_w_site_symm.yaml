@@ -10,6 +10,8 @@ radius: 7.  # maximum search radius for OTF graph building in decoder
 timesteps: 1000
 ip: true
 use_ks: false
+use_gt_frac_coords: false
+use_site_symm: false
 
 defaults:
   - decoder: cspnet

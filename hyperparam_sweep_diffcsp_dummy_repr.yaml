@@ -1,0 +1,40 @@
+program: diffcsp.run
+method: grid
+name: test different hyperparams (perov csp)
+parameters:
+    expname:
+      value: perov_csp
+    data:
+      value: perov
+    data.use_random_representatives:
+      value: True
+    data.number_representatives:
+      value: 20
+    logging.wandb.mode:
+      value: online
+    logging.wandb.project:
+      value: diffcsp_symmetry
+    logging.val_check_interval:
+      value: 1
+    model:
+      value: diffusion_csp_w_site_symm
+    model.use_ks:
+      value: True
+    model.ip:
+      value: False
+    model.use_gt_frac_coords:
+      values: [True, False]
+    model.decoder.num_freqs:
+      value: 128
+    model.decoder.num_layers:
+      values: [6, 8]
+    model.decoder.hidden_dim:
+      value: 512
+    model.use_site_symm:
+      value: True
+command:
+    - ${env}
+    - python3
+    - -m
+    - ${program}
+    - ${args_no_hyphens}

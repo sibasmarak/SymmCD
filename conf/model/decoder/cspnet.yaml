@@ -12,3 +12,5 @@ cutoff: ${model.radius}
 ln: true
 ip: ${model.ip}
 use_ks: ${model.use_ks}
+use_gt_frac_coords: ${model.use_gt_frac_coords}
+use_site_symm: ${model.use_site_symm}

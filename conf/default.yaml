@@ -1,4 +1,5 @@
 expname: test
+wandb_dir: ${oc.env:WABDB_DIR}
 
 # metadata specialised for each experiment
 core:

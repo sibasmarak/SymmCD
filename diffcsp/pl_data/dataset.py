@@ -18,8 +18,9 @@ class CrystDataset(Dataset):
     def __init__(self, name: ValueNode, path: ValueNode,
                  prop: ValueNode, niggli: ValueNode, primitive: ValueNode,
                  graph_method: ValueNode, preprocess_workers: ValueNode,
-                 lattice_scale_method: ValueNode, save_path: ValueNode, tolerance: ValueNode, use_space_group: ValueNode, use_pos_index: ValueNode,
-                 **kwargs):
+                 lattice_scale_method: ValueNode, save_path: ValueNode, tolerance: ValueNode, 
+                 use_space_group: ValueNode, use_pos_index: ValueNode, number_representatives: ValueNode, 
+                 use_random_representatives:ValueNode, **kwargs):
         super().__init__()
         self.path = path
         self.name = name
@@ -32,6 +33,8 @@ class CrystDataset(Dataset):
         self.use_space_group = use_space_group
         self.use_pos_index = use_pos_index
         self.tolerance = tolerance
+        self.number_representatives = number_representatives
+        self.use_random_representatives = use_random_representatives
 
         self.preprocess(save_path, preprocess_workers, prop)
 
@@ -51,7 +54,9 @@ class CrystDataset(Dataset):
             graph_method=self.graph_method,
             prop_list=[prop],
             use_space_group=self.use_space_group,
-            tol=self.tolerance)
+            tol=self.tolerance,
+            num_repr=self.number_representatives,
+            use_random_repr=self.use_random_representatives)
             torch.save(cached_data, save_path)
             self.cached_data = cached_data
 
@@ -88,9 +93,13 @@ class CrystDataset(Dataset):
             data.spacegroup = torch.LongTensor([data_dict['spacegroup']])
             data.ops = torch.Tensor(data_dict['wyckoff_ops'])
             data.anchor_index = torch.LongTensor(data_dict['anchors'])
+            data.number_repsentatives = torch.LongTensor([data_dict['number_representatives']])
 
             data.sg_condition = torch.Tensor(data_dict['sg_binary'])
             data.site_symm = torch.Tensor(data_dict['site_symm_binary'])
+            
+            data.dummy_origin_ind = torch.Tensor([data_dict['dummy_origin_ind']])
+            data.dummy_repr_ind = torch.Tensor([data_dict['dummy_repr_ind']])
 
         if self.use_pos_index:
             pos_dic = {}

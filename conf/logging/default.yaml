@@ -3,12 +3,13 @@ val_check_interval: 5
 progress_bar_refresh_rate: 1
 
 wandb:
-  name: ${expname}
+  # name: ${expname}
   project: diffcsp
-  entity: null
+  entity: symmetry_group
   log_model: True
   mode: 'online'
   group: ${expname}
+  save_dir: ${wandb_dir}
 
 wandb_watch:
   log: 'all'

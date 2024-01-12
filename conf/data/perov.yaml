@@ -16,6 +16,8 @@ tolerance: 0.01
 
 use_space_group: true
 use_pos_index: false
+number_representatives: 10
+use_random_representatives: false
 
 train_max_epochs: 3000
 early_stopping_patience: 100000
@@ -38,6 +40,8 @@ datamodule:
       tolerance: ${data.tolerance}
       use_space_group: ${data.use_space_group}
       use_pos_index: ${data.use_pos_index}
+      number_representatives: ${data.number_representatives}
+      use_random_representatives: ${data.use_random_representatives}
       lattice_scale_method: ${data.lattice_scale_method}
       preprocess_workers: ${data.preprocess_workers}
 
@@ -53,6 +57,8 @@ datamodule:
         tolerance: ${data.tolerance}
         use_space_group: ${data.use_space_group}
         use_pos_index: ${data.use_pos_index}
+        number_representatives: ${data.number_representatives}
+        use_random_representatives: ${data.use_random_representatives}
         lattice_scale_method: ${data.lattice_scale_method}
         preprocess_workers: ${data.preprocess_workers}
 
@@ -68,6 +74,8 @@ datamodule:
         tolerance: ${data.tolerance}
         use_space_group: ${data.use_space_group}
         use_pos_index: ${data.use_pos_index}
+        number_representatives: ${data.number_representatives}
+        use_random_representatives: ${data.use_random_representatives}
         lattice_scale_method: ${data.lattice_scale_method}
         preprocess_workers: ${data.preprocess_workers}
 

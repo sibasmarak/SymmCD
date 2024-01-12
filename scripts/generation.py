@@ -11,6 +11,8 @@ import time
 import argparse
 import torch
 
+from collections import Counter
+
 from tqdm import tqdm
 from torch.optim import Adam
 from pathlib import Path
@@ -112,26 +114,49 @@ def diffusion(loader, model, step_lr):
 
 class SampleDataset(Dataset):
 
-    def __init__(self, dataset, total_num):
+    def __init__(self, dataset, total_num, test_ori_path, num_repr = 10):
         super().__init__()
         self.total_num = total_num
         self.distribution = train_dist[dataset]
         self.num_atoms = np.random.choice(len(self.distribution), total_num, p = self.distribution)
+        self.num_repr = num_repr
         self.is_carbon = dataset == 'carbon'
 
-        self.additional_test = torch.load("/home/mila/s/siba-smarak.panigrahi/DiffCSP/data/perov_5/test_ori.pt")
+        self.additional_test = torch.load(test_ori_path)
         self.additional_test_len = len(self.additional_test)
+        
+        sg_counter = Counter()
+        sg_number_binary_mapper = {}
+        for i in range(self.additional_test_len):
+            sg_counter[self.additional_test[i]['spacegroup']] += 1
+            sg_number_binary_mapper[self.additional_test[i]['spacegroup']] = self.additional_test[i]['sg_binary']
+            
+        # convert the counter to a distribution
+        sg_dist = []
+        for i in range(230):
+            sg_dist.append(sg_counter[i])
+        sg_dist = np.array(sg_dist)
+        sg_dist = sg_dist / np.sum(sg_dist)
+        self.sg_dist = sg_dist
+        self.sg_number_binary_mapper = sg_number_binary_mapper
+        
     def __len__(self) -> int:
         return self.total_num
 
     def __getitem__(self, index):
-        # better way to obtain number of atoms/representatives rather than defining distribution
-        num_atom = self.additional_test[index%self.additional_test_len]['graph_arrays'][-1]
+        # grounded way to obtain number of atoms/representatives rather than defining distribution
+        num_atom = self.num_repr + 1 # self.additional_test[index%self.additional_test_len]['graph_arrays'][-1]
+
+        spacegroup = np.random.choice(230, p = self.sg_dist)
         data = Data(
             num_atoms=torch.LongTensor([num_atom]),
             num_nodes=num_atom,
-            spacegroup=self.additional_test[index%self.additional_test_len]['spacegroup'],
-            sg_condition=self.additional_test[index%self.additional_test_len]['sg_binary'],
+            
+            # select a random space group
+            spacegroup=spacegroup, # number
+            sg_condition=self.sg_number_binary_mapper[spacegroup], # float tensor
+            # spacegroup=self.additional_test[index%self.additional_test_len]['spacegroup'],
+            # sg_condition=self.additional_test[index%self.additional_test_len]['sg_binary'],
         )
         if self.is_carbon:
             data.atom_types = torch.LongTensor([6] * num_atom)
@@ -149,7 +174,8 @@ def main(args):
 
     print('Evaluate the diffusion model.')
 
-    test_set = SampleDataset(args.dataset, args.batch_size * args.num_batches_to_samples)
+    test_set = SampleDataset(args.dataset, args.batch_size * args.num_batches_to_samples, 
+                             cfg.data.datamodule.datasets.test[0].save_path, cfg.data.number_representatives)
     test_loader = DataLoader(test_set, batch_size = args.batch_size)
 
     start_time = time.time()

@@ -161,5 +161,8 @@ cython_debug/
 output/
 *.pt
 
-cdvae
+cdvae/
 .vscode/
+perov_sweep_output/
+mp_20_sweep_output/
+wandb/

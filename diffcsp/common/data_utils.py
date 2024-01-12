@@ -88,12 +88,12 @@ chemical_symbols = [
     'Cs', 'Ba', 'La', 'Ce', 'Pr', 'Nd', 'Pm', 'Sm', 'Eu', 'Gd', 'Tb', 'Dy',
     'Ho', 'Er', 'Tm', 'Yb', 'Lu',
     'Hf', 'Ta', 'W', 'Re', 'Os', 'Ir', 'Pt', 'Au', 'Hg', 'Tl', 'Pb', 'Bi',
-    'Po', 'At', 'Rn', # 86
+    'Po', 'At', 'Rn', # 87
     # 7
     'Fr', 'Ra', 'Ac', 'Th', 'Pa', 'U', 'Np', 'Pu', 'Am', 'Cm', 'Bk',
     'Cf', 'Es', 'Fm', 'Md', 'No', 'Lr',
     'Rf', 'Db', 'Sg', 'Bh', 'Hs', 'Mt', 'Ds', 'Rg', 'Cn', 'Nh', 'Fl', 'Mc',
-    'Lv', 'Ts', 'Og'] # 118
+    'Lv', 'Ts', 'Og'] # 119
 
 B_MATRICES = np.zeros((6, 3, 3))
 B_MATRICES[0, 0, 1] = B_MATRICES[0, 1, 0] = 1
@@ -104,6 +104,8 @@ B_MATRICES[3, 1, 1] = -1
 B_MATRICES[4, 0, 0] = B_MATRICES[4, 1, 1] = 1
 B_MATRICES[4, 2, 2] = -2
 B_MATRICES[5, 0, 0] =  B_MATRICES[5, 1, 1]  = B_MATRICES[5, 2, 2]  = 1
+
+N_SPACEGROUPS = 230
 
 def lattice_from_ks(ks):
     ks = ks.reshape(6, 1, 1)
@@ -120,6 +122,33 @@ def lattice_to_ks(L):
     for i in range(6):
         ks[i] = frobenius_prod(S, B_MATRICES[i]) / frobenius_prod(B_MATRICES[i], B_MATRICES[i])
     return ks
+
+def sg_to_ks_mask(sg):
+    n_lattices = sg.shape[0]
+    ks_mask = torch.ones((n_lattices, 6)).to(sg.device)
+    ks_add = torch.zeros((n_lattices, 6)).to(sg.device)
+    triclinic_mask = (sg > 0) & (sg <= 2)
+
+    monoclinic_mask  = (sg >= 3) & (sg <= 15)
+    ks_mask[monoclinic_mask, 0] = ks_mask[monoclinic_mask, 2] = 0
+
+    orthorhombic_mask = (sg >= 16) & (sg <= 74)
+    ks_mask[orthorhombic_mask, 0:3] =  0
+
+    tetragonal_mask = (sg >= 75) & (sg <= 142)
+    ks_mask[tetragonal_mask, 0:4] = 0
+
+    hexagonal_mask = (sg >= 143) & (sg <= 194)
+    ks_mask[hexagonal_mask, 0:4] = 0
+    ks_add[hexagonal_mask, 0] = -np.log(3)/4
+
+    cubic_mask = (sg >= 195) & (sg <= 230)
+    ks_mask[cubic_mask, 0:5] = 0
+
+    return ks_mask, ks_add
+
+def mask_ks(ks, ks_mask, ks_add):
+    return ks * ks_mask + ks_add
 
 CrystalNN = local_env.CrystalNN(
     distance_cutoffs=None, x_diff_weight=-1, porous_adjustment=False)
@@ -250,9 +279,11 @@ def get_site_symmetry_binary_repr(notation:str, label:str = None):
     return torch.cat(axis_wise_binary_repr, dim=0)
 
 
-def get_symmetry_info(crystal, tol=0.01):
+def get_symmetry_info(crystal, tol=0.01, num_repr=10, use_random_repr=False):
     spga = SpacegroupAnalyzer(crystal, symprec=tol)
-    crystal = spga.get_refined_structure()
+    # NOTE: this converts [x,0,0.5] -> [0, 0.5, x] (or the canonical form)
+    # basically diffusion model learns the distribution of this refined structure and not the original structure
+    crystal = spga.get_refined_structure() 
     pyx = pyxtal()
     try:
         pyx.from_seed(crystal, tol=0.01)
@@ -285,6 +316,36 @@ def get_symmetry_info(crystal, tol=0.01):
         #     matrices.append(syms.affine_matrix)
         #     coords.append(syms.operate(coord))
         #     anchors.append(anchor)
+    
+    gt_num_coords = len(coords)
+    if num_repr:
+        # NOTE: add dummy representative element
+        for i in range(num_repr - len(coords)):
+            species.append('Md')
+            matrices.append(np.eye(4))
+            anchors.append(len(matrices) - 1)
+            if use_random_repr:
+                # use random frac coords for dummy representatives
+                coords.append(np.random.rand(3) % 1.)
+                wp = Group(space_group).Wyckoff_positions[0] # most general Wyckoff position
+                wp.get_site_symmetry()
+                hmwyckoffs.append(wp.site_symm)
+                labels.append(wp.get_label())
+            else:
+                # sample from coords to append to coords
+                random_index = np.random.randint(len(coords))
+                coords.append(coords[random_index])
+                hmwyckoffs.append(hmwyckoffs[random_index])
+                labels.append(labels[random_index])
+        
+    # NOTE: add dummy origin element
+    coords.append(np.zeros_like(coords[0])) # position of dummy element
+    species.append('Md') # symbol of dummy element
+    matrices.append(np.eye(4)) # identity matrix
+    hmwyckoffs.append(hmwyckoffs[-1]) # HM notation of dummy element
+    labels.append(labels[-1]) # label of dummy element
+    anchors.append(len(matrices) - 1) # anchor of dummy element
+    
     anchors = np.array(anchors)
     matrices = np.array(matrices)
     coords = np.array(coords) % 1.
@@ -295,6 +356,7 @@ def get_symmetry_info(crystal, tol=0.01):
         'hmnotation':pyx.atom_sites[0].wp.get_hm_symbol(),
         'hmwyckoffs':hmwyckoffs,
         'labels': labels,
+        'number_representatives': gt_num_coords,
     }
     crystal = Structure(
         lattice=Lattice.from_parameters(*np.array(pyx.lattice.get_para(degree=True))),
@@ -302,7 +364,15 @@ def get_symmetry_info(crystal, tol=0.01):
         coords=coords,
         coords_are_cartesian=False,
     )
-    return crystal, sym_info
+    
+    # NOTE: return dummy_origin indicator and dummy_representative indicator
+    if num_repr:
+        dummy_origin_indicator = np.array([0] * num_repr + [1]).astype(int)
+        dummy_representative_indicator = np.array([0] * gt_num_coords + [1] * (num_repr - gt_num_coords) + [0]).astype(int)
+    else:
+        dummy_origin_indicator = np.array([0] * gt_num_coords + [1]).astype(int)
+        dummy_representative_indicator = np.array([0] * gt_num_coords + [0]).astype(int)
+    return crystal, sym_info, dummy_representative_indicator, dummy_origin_indicator
 
 def build_crystal_graph(crystal, graph_method='crystalnn'):
     """
@@ -313,7 +383,8 @@ def build_crystal_graph(crystal, graph_method='crystalnn'):
             crystal_graph = StructureGraph.with_local_env_strategy(
                 crystal, CrystalNN)
         except:
-            crystalNN_tmp = local_env.CrystalNN(distance_cutoffs=None, x_diff_weight=-1, porous_adjustment=False, search_cutoff=10)
+            # TODO: make it 10 for perov and 14 for mp20
+            crystalNN_tmp = local_env.CrystalNN(distance_cutoffs=None, x_diff_weight=-1, porous_adjustment=False, search_cutoff=14)
             crystal_graph = StructureGraph.with_local_env_strategy(
                 crystal, crystalNN_tmp) 
     elif graph_method == 'none':
@@ -1298,7 +1369,7 @@ def get_scaler_from_data_list(data_list, key):
     return scaler
 
 
-def process_one(row, niggli, primitive, graph_method, prop_list, use_space_group = False, tol=0.01):
+def process_one(row, niggli, primitive, graph_method, prop_list, use_space_group = False, tol=0.01, num_repr=10, use_random_repr=False):
     crystal_str = row['cif']
     crystal = build_crystal(
         crystal_str, niggli=niggli, primitive=primitive)
@@ -1306,7 +1377,7 @@ def process_one(row, niggli, primitive, graph_method, prop_list, use_space_group
     lattice_ks = lattice_to_ks(lattice_matrix)
     result_dict = {}
     if use_space_group:
-        crystal, sym_info = get_symmetry_info(crystal, tol = tol)
+        crystal, sym_info, dummy_repr_ind, dummy_origin_ind = get_symmetry_info(crystal, tol = tol, num_repr = num_repr, use_random_repr = use_random_repr)
         result_dict.update(sym_info)
 
         # obtain the HM binary representation for space group and site symmetries
@@ -1314,6 +1385,9 @@ def process_one(row, niggli, primitive, graph_method, prop_list, use_space_group
         site_repr = [get_site_symmetry_binary_repr(hmnot, label=lbl) for hmnot, lbl in zip(sym_info['hmwyckoffs'], sym_info['labels'])]
         result_dict['sg_binary'] = sg_repr
         result_dict['site_symm_binary'] = torch.stack(site_repr)
+        result_dict['dummy_repr_ind'] = dummy_repr_ind
+        result_dict['dummy_origin_ind'] = dummy_origin_ind
+        result_dict['number_representatives'] = sym_info['number_representatives']
 
     else:
         result_dict['spacegroup'] = 1
@@ -1330,7 +1404,7 @@ def process_one(row, niggli, primitive, graph_method, prop_list, use_space_group
 
 
 def preprocess(input_file, num_workers, niggli, primitive, graph_method,
-               prop_list, use_space_group = False, tol=0.01):
+               prop_list, use_space_group = False, tol=0.01, num_repr=10, use_random_repr=False):
     df = pd.read_csv(input_file)
 
     unordered_results = p_umap(
@@ -1342,11 +1416,14 @@ def preprocess(input_file, num_workers, niggli, primitive, graph_method,
         [prop_list] * len(df),
         [use_space_group] * len(df),
         [tol] * len(df),
+        [num_repr] * len(df),
+        [use_random_repr] * len(df),
         num_cpus=num_workers)
 
     # unordered_results = []
-    # for r, n, p, gm, pl, usg, t in zip([df.iloc[idx] for idx in range(len(df))], [niggli] * len(df), [primitive] * len(df), [graph_method] * len(df), [prop_list] * len(df), [use_space_group] * len(df), [tol] * len(df)):
-    #     result_dict = process_one(r, n, p, gm, pl, usg, t)
+    # for r, n, p, gm, pl, usg, t, nr, urr in zip([df.iloc[idx] for idx in range(len(df))], [niggli] * len(df), [primitive] * len(df), [graph_method] * len(df), [prop_list] * len(df), 
+    #                                    [use_space_group] * len(df), [tol] * len(df) , [num_repr] * len(df), [use_random_repr] * len(df)):
+    #     result_dict = process_one(r, n, p, gm, pl, usg, t, nr, urr)
     #     unordered_results.append(result_dict)
 
     mpid_to_results = {result['mp_id']: result for result in unordered_results}

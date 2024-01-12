@@ -112,23 +112,28 @@ class CSPNet(nn.Module):
         ln = False,
         ip = True,
         use_ks = False,
+        use_gt_frac_coords=False,
+        use_site_symm=False,
         smooth = False,
         pred_type = False,
-        site_symm_type = False,
+        pred_site_symm_type = False,
     ):
         super(CSPNet, self).__init__()
 
         self.ip = ip
         self.smooth = smooth
         self.use_ks = use_ks
+        self.use_gt_frac_coords = use_gt_frac_coords
+        self.use_site_symm = use_site_symm
         assert self.use_ks != self.ip # Cannot use both inner product representation and k representation
         if self.smooth:
             self.node_embedding = nn.Linear(max_atoms, hidden_dim)
         else:
             self.node_embedding = nn.Embedding(max_atoms, hidden_dim)
-        site_symm_dim = 66 if site_symm_type else 0
+        site_symm_dim = 66 if self.use_site_symm else 0
         lattice_dim = 9 if self.ip else 6
-        self.atom_latent_emb = nn.Linear(hidden_dim + latent_dim + site_symm_dim, hidden_dim)
+        frac_coord_dim = 3 if self.use_gt_frac_coords else 0
+        self.atom_latent_emb = nn.Linear(hidden_dim + latent_dim + site_symm_dim + frac_coord_dim, hidden_dim)
         if act_fn == 'silu':
             self.act_fn = nn.SiLU()
         if dis_emb == 'sin':
@@ -147,12 +152,12 @@ class CSPNet(nn.Module):
         self.ln = ln
         self.edge_style = edge_style
         self.pred_type = pred_type
-        self.site_symm_type = site_symm_type
+        self.pred_site_symm_type = pred_site_symm_type
         if self.ln:
             self.final_layer_norm = nn.LayerNorm(hidden_dim)
         if self.pred_type:
-            self.type_out = nn.Linear(hidden_dim, MAX_ATOMIC_NUM)
-        if self.site_symm_type:
+            self.type_out = nn.Linear(hidden_dim, max_atoms)
+        if self.pred_site_symm_type:
             self.site_symm_in = nn.Linear(66, hidden_dim) 
             self.site_symm_out = nn.Linear(hidden_dim, 66)
 
@@ -277,10 +282,11 @@ class CSPNet(nn.Module):
             node_features = self.node_embedding(atom_types - 1)
 
         t_per_atom = t.repeat_interleave(num_atoms, dim=0)
-        node_features = torch.cat([node_features, t_per_atom], dim=1)
-        if self.site_symm_type:
-            # node_features = torch.cat([node_features, self.site_symm_in(site_symm_probs)], dim=1)
+        if self.use_site_symm:
             node_features = torch.cat([node_features, site_symm_probs], dim=1)
+        if self.use_gt_frac_coords:
+            node_features = torch.cat([node_features, frac_coords], dim=1)
+        node_features = torch.cat([node_features, t_per_atom], dim=1)
         node_features = self.atom_latent_emb(node_features)
 
         for i in range(0, self.num_layers):
@@ -297,13 +303,16 @@ class CSPNet(nn.Module):
             lattice_out = lattice_out.view(-1, 3, 3)
             if self.ip:
                 lattice_out = torch.einsum('bij,bjk->bik', lattice_out, lattices)
-        if self.pred_type and self.site_symm_type:
+        if self.pred_type and self.pred_site_symm_type:
             type_out = self.type_out(node_features)
             site_symm_out = self.site_symm_out(node_features)
             return lattice_out, coord_out, type_out, site_symm_out.reshape(-1, 66)
-        if self.pred_type:
+        if self.pred_type and not self.pred_site_symm_type:
             type_out = self.type_out(node_features)
             return lattice_out, coord_out, type_out
+        if not self.pred_type and self.pred_site_symm_type:
+            site_symm_out = self.site_symm_out(node_features)
+            return lattice_out, coord_out, site_symm_out.reshape(-1, 66)
 
         return lattice_out, coord_out
 
