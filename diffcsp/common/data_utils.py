@@ -318,33 +318,25 @@ def get_symmetry_info(crystal, tol=0.01, num_repr=10, use_random_repr=False):
         #     anchors.append(anchor)
     
     gt_num_coords = len(coords)
+    # add dummy origin element
+    # coords.append(np.zeros_like(coords[0])) # position of dummy element
+    # species.append('Md') # symbol of dummy element
+    # matrices.append(np.eye(4)) # identity matrix
+    # hmwyckoffs.append(hmwyckoffs[-1]) # HM notation of dummy element
+    # labels.append(labels[-1]) # label of dummy element
+    # anchors.append(len(matrices) - 1) # anchor of dummy element
     if num_repr:
-        # NOTE: add dummy representative element
-        for i in range(num_repr - len(coords)):
+        # add dummy representative element
+        for _ in range(num_repr - gt_num_coords):
             species.append('Md')
             matrices.append(np.eye(4))
             anchors.append(len(matrices) - 1)
-            if use_random_repr:
-                # use random frac coords for dummy representatives
-                coords.append(np.random.rand(3) % 1.)
-                wp = Group(space_group).Wyckoff_positions[0] # most general Wyckoff position
-                wp.get_site_symmetry()
-                hmwyckoffs.append(wp.site_symm)
-                labels.append(wp.get_label())
-            else:
-                # sample from coords to append to coords
-                random_index = np.random.randint(len(coords))
-                coords.append(coords[random_index])
-                hmwyckoffs.append(hmwyckoffs[random_index])
-                labels.append(labels[random_index])
-        
-    # NOTE: add dummy origin element
-    coords.append(np.zeros_like(coords[0])) # position of dummy element
-    species.append('Md') # symbol of dummy element
-    matrices.append(np.eye(4)) # identity matrix
-    hmwyckoffs.append(hmwyckoffs[-1]) # HM notation of dummy element
-    labels.append(labels[-1]) # label of dummy element
-    anchors.append(len(matrices) - 1) # anchor of dummy element
+
+            coords.append(np.random.uniform(size=3))
+            wp = Group(space_group).Wyckoff_positions[0] # most general Wyckoff position
+            wp.get_site_symmetry()
+            hmwyckoffs.append(wp.site_symm)
+            labels.append(wp.get_label())
     
     anchors = np.array(anchors)
     matrices = np.array(matrices)
@@ -367,11 +359,11 @@ def get_symmetry_info(crystal, tol=0.01, num_repr=10, use_random_repr=False):
     
     # NOTE: return dummy_origin indicator and dummy_representative indicator
     if num_repr:
-        dummy_origin_indicator = np.array([0] * num_repr + [1]).astype(int)
-        dummy_representative_indicator = np.array([0] * gt_num_coords + [1] * (num_repr - gt_num_coords) + [0]).astype(int)
+        dummy_origin_indicator = np.array([0] * num_repr).astype(int)
+        dummy_representative_indicator = np.array([0] * gt_num_coords + [1] * (num_repr - gt_num_coords)).astype(int)
     else:
-        dummy_origin_indicator = np.array([0] * gt_num_coords + [1]).astype(int)
-        dummy_representative_indicator = np.array([0] * gt_num_coords + [0]).astype(int)
+        dummy_origin_indicator = np.array([0] * gt_num_coords).astype(int)
+        dummy_representative_indicator = np.array([0] * gt_num_coords).astype(int)
     return crystal, sym_info, dummy_representative_indicator, dummy_origin_indicator
 
 def build_crystal_graph(crystal, graph_method='crystalnn'):
@@ -384,7 +376,7 @@ def build_crystal_graph(crystal, graph_method='crystalnn'):
                 crystal, CrystalNN)
         except:
             # TODO: make it 10 for perov and 14 for mp20
-            crystalNN_tmp = local_env.CrystalNN(distance_cutoffs=None, x_diff_weight=-1, porous_adjustment=False, search_cutoff=14)
+            crystalNN_tmp = local_env.CrystalNN(distance_cutoffs=None, x_diff_weight=-1, porous_adjustment=False, search_cutoff=20)
             crystal_graph = StructureGraph.with_local_env_strategy(
                 crystal, crystalNN_tmp) 
     elif graph_method == 'none':

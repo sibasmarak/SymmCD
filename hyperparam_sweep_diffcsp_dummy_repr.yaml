@@ -1,11 +1,11 @@
 program: diffcsp.run
 method: grid
-name: test different hyperparams (perov csp)
+name: test different hyperparams (mp_20 ab-intio, w/o dummy origin)
 parameters:
     expname:
-      value: perov_csp
+      value: mp_20_ab_intio
     data:
-      value: perov
+      value: mp_20
     data.use_random_representatives:
       value: True
     data.number_representatives:
@@ -17,19 +17,21 @@ parameters:
     logging.val_check_interval:
       value: 1
     model:
-      value: diffusion_csp_w_site_symm
+      value: diffusion_w_site_symm
+    model.cost_symm:
+      values: [20., 40.]
     model.use_ks:
       value: True
     model.ip:
       value: False
     model.use_gt_frac_coords:
-      values: [True, False]
+      value: True
     model.decoder.num_freqs:
       value: 128
     model.decoder.num_layers:
-      values: [6, 8]
+      values: [8, 10]
     model.decoder.hidden_dim:
-      value: 512
+      values: [1024, 512]
     model.use_site_symm:
       value: True
 command:

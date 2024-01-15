@@ -133,7 +133,7 @@ class SampleDataset(Dataset):
             
         # convert the counter to a distribution
         sg_dist = []
-        for i in range(230):
+        for i in range(1, 231):
             sg_dist.append(sg_counter[i])
         sg_dist = np.array(sg_dist)
         sg_dist = sg_dist / np.sum(sg_dist)
@@ -147,7 +147,7 @@ class SampleDataset(Dataset):
         # grounded way to obtain number of atoms/representatives rather than defining distribution
         num_atom = self.num_repr + 1 # self.additional_test[index%self.additional_test_len]['graph_arrays'][-1]
 
-        spacegroup = np.random.choice(230, p = self.sg_dist)
+        spacegroup = np.random.choice(230, p = self.sg_dist) + 1
         data = Data(
             num_atoms=torch.LongTensor([num_atom]),
             num_nodes=num_atom,

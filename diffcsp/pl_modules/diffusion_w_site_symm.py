@@ -264,12 +264,6 @@ class CSPDiffusion(BaseModule):
         else:
             loss_lattice = F.mse_loss(pred_lattice, rand_l)
 
-        # NOTE: implementation where noise for dummy representative atoms coords is also predicted
-        # if self.hparams.decoder.use_site_symm:
-        #     loss_coord = F.mse_loss(
-        #         pred_x * (1 - dummy_origin_ind.reshape(-1, 1)), 
-        #         tar_x * (1 - dummy_origin_ind.reshape(-1, 1)))
-        # else:
         loss_coord = F.mse_loss(
             pred_x * (1 - (dummy_origin_ind.reshape(-1, 1) + dummy_repr_ind.reshape(-1, 1))),
             tar_x * (1 - (dummy_origin_ind.reshape(-1, 1) + dummy_repr_ind.reshape(-1, 1))))
@@ -279,8 +273,8 @@ class CSPDiffusion(BaseModule):
             rand_t * (1 - dummy_origin_ind.reshape(-1, 1)))
         
         loss_symm = F.mse_loss(
-            pred_symm * (1 - dummy_origin_ind.reshape(-1, 1)), 
-            rand_symm * (1 - dummy_origin_ind.reshape(-1, 1)))
+            pred_symm * (1 - (dummy_origin_ind.reshape(-1, 1) + dummy_repr_ind.reshape(-1, 1))), 
+            rand_symm * (1 - (dummy_origin_ind.reshape(-1, 1) + dummy_repr_ind.reshape(-1, 1))))
     
 
         loss = (

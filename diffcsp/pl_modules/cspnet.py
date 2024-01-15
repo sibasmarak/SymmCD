@@ -10,6 +10,8 @@ from einops import rearrange, repeat
 
 from diffcsp.common.data_utils import lattice_params_to_matrix_torch, get_pbc_distances, radius_graph_pbc, frac_to_cart_coords, repeat_blocks
 
+from diffcsp.pl_modules.model import build_mlp
+
 MAX_ATOMIC_NUM=100
 
 class SinusoidsEmbedding(nn.Module):
@@ -130,16 +132,19 @@ class CSPNet(nn.Module):
             self.node_embedding = nn.Linear(max_atoms, hidden_dim)
         else:
             self.node_embedding = nn.Embedding(max_atoms, hidden_dim)
-        site_symm_dim = 66 if self.use_site_symm else 0
+        self.site_symm_embedding = build_mlp(in_dim=66, hidden_dim=128, fc_num_layers=2, out_dim=latent_dim)
+        site_symm_dim = latent_dim if self.use_site_symm else 0
         lattice_dim = 9 if self.ip else 6
         frac_coord_dim = 3 if self.use_gt_frac_coords else 0
-        self.atom_latent_emb = nn.Linear(hidden_dim + latent_dim + site_symm_dim + frac_coord_dim, hidden_dim)
         if act_fn == 'silu':
             self.act_fn = nn.SiLU()
         if dis_emb == 'sin':
             self.dis_emb = SinusoidsEmbedding(n_frequencies = num_freqs)
         elif dis_emb == 'none':
             self.dis_emb = None
+        if self.use_gt_frac_coords and self.dis_emb:
+            frac_coord_dim = self.dis_emb.dim
+        self.atom_latent_emb = nn.Linear(hidden_dim + latent_dim + site_symm_dim + frac_coord_dim, hidden_dim)
         for i in range(0, num_layers):
             self.add_module(
                 "csp_layer_%d" % i, CSPLayer(hidden_dim, self.act_fn, self.dis_emb, ln=ln, ip=ip, use_ks=use_ks)
@@ -282,11 +287,11 @@ class CSPNet(nn.Module):
             node_features = self.node_embedding(atom_types - 1)
 
         t_per_atom = t.repeat_interleave(num_atoms, dim=0)
-        if self.use_site_symm:
-            node_features = torch.cat([node_features, site_symm_probs], dim=1)
-        if self.use_gt_frac_coords:
-            node_features = torch.cat([node_features, frac_coords], dim=1)
         node_features = torch.cat([node_features, t_per_atom], dim=1)
+        if self.use_site_symm:
+            node_features = torch.cat([node_features, self.site_symm_embedding(site_symm_probs)], dim=1)
+        if self.use_gt_frac_coords and self.dis_emb:
+            node_features = torch.cat([node_features, self.dis_emb(frac_coords)], dim=1)
         node_features = self.atom_latent_emb(node_features)
 
         for i in range(0, self.num_layers):
