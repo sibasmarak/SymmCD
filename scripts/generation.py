@@ -133,7 +133,7 @@ def diffusion(loader, model, step_lr, use_sg=False):
 
 class SampleDataset(Dataset):
 
-    def __init__(self, dataset, total_num, use_num_atoms_per_sg = False):
+    def __init__(self, dataset, total_num, use_num_atoms_per_sg=False):
         super().__init__()
         self.total_num = total_num
         self.distribution = train_dist[dataset]
@@ -165,6 +165,7 @@ class SampleDataset(Dataset):
         return data
 
 
+
 def main(args):
     # load_data if do reconstruction.
     model_path = Path(args.model_path)
@@ -177,7 +178,13 @@ def main(args):
 
     print('Evaluate the diffusion model.')
 
-    test_set = SampleDataset(args.dataset, args.batch_size * args.num_batches_to_samples, args.num_atoms_per_sg)
+    if args.load_dataset is not None:
+        test_set = torch.load(args.load_dataset)
+    else:
+        test_set = SampleDataset(args.dataset, args.batch_size * args.num_batches_to_samples, args.num_atoms_per_sg)
+    if args.save_dataset is not None:
+        torch.save(test_set, args.save_dataset)
+
     test_loader = DataLoader(test_set, batch_size = args.batch_size)
 
     start_time = time.time()
@@ -209,6 +216,8 @@ if __name__ == '__main__':
     parser.add_argument('--batch_size', default=500, type=int)
     parser.add_argument('--label', default='')
     parser.add_argument('--num_atoms_per_sg', default=False, type=bool)
+    parser.add_argument('--load_dataset', default=None, type=str)
+    parser.add_argument('--save_dataset', default=None, type=str)
     args = parser.parse_args()
 
 

@@ -405,6 +405,8 @@ def main(args):
             csv = pd.read_csv(args.gt_file)
             gt_crys = []
             for i in tqdm(range(len(csv['cif']))):
+                if args.num_test_set != 0 and i > args.num_test_set:
+                    break
                 gt_crys.append(get_gt_crys_ori(csv['cif'][i]))
         else:
             # always ground gt_file is provided
@@ -417,7 +419,7 @@ def main(args):
                 gt_crys.append  (Crystal(true_crystal_array_list[i]))
         print("starting gen_evaluator")
         gen_evaluator = GenEval(
-            gen_crys, gt_crys, eval_model_name=eval_model_name)
+            gen_crys, gt_crys, eval_model_name=eval_model_name, n_samples=args.n_samples)
         print("starting gen_evaluator.get_metrics")
         gen_metrics = gen_evaluator.get_metrics()
         all_metrics.update(gen_metrics)
@@ -489,5 +491,7 @@ if __name__ == '__main__':
     parser.add_argument('--tasks', nargs='+', default=['csp', 'gen'])
     parser.add_argument('--gt_file',default='')
     parser.add_argument('--multi_eval',action='store_true')
+    parser.add_argument('--num_test_set',type=int, default=0)
+    parser.add_argument('--n_samples', type=int, default=1000)
     args = parser.parse_args()
     main(args)
