@@ -1,5 +1,23 @@
 # DiffCSP
 
+## Setup
+1. follow the instructions from [DiffCSP's .env setup](https://github.com/jiaor17/DiffCSP?tab=readme-ov-file#dependencies-and-setup) to setup/add `.env` file  
+2. create the anaconda environment with the `environment.yml` file (`conda env create -f environment.yml`: creates environment with name `diffcsp`)
+3. install `matminer` with `cd matminer && pip install -e .`   
+4. clone [`cdvae repo`](https://github.com/txie-93/cdvae) in the same directory level as `conf` and `data` and install it    
+5. if you execute `run_diff.sh`, it should work now  
+```
+DiffCSP (should now look like this, and the environment should contain cdvae and matminer packages)
+├── cdvae
+├── conf
+├── data 
+├── diffcsp
+├── matminer
+├── scripts
+├── .env
+├── .........
+```
+
 Implementation codes for Crystal Structure Prediction by Joint Equivariant Diffusion.
 
 ### Dependencies
