@@ -310,7 +310,7 @@ def get_symmetry_info(crystal, tol=0.01, num_repr=10, use_random_repr=False):
         hmwyckoffs.append(site.wp.site_symm) # HM notation of wyckoff position
         labels.append(site.wp.get_label()) # label of wyckoff position (1a, 3a, etc.)
 
-        # old code from DiffCSP
+        # old code from DiffCSP (generate all atoms in the orbit)
         # for syms in site.wp:
         #     species.append(specie)
         #     matrices.append(syms.affine_matrix)
@@ -318,7 +318,7 @@ def get_symmetry_info(crystal, tol=0.01, num_repr=10, use_random_repr=False):
         #     anchors.append(anchor)
     
     gt_num_coords = len(coords)
-    # add dummy origin element
+    ##### add dummy origin element
     # coords.append(np.zeros_like(coords[0])) # position of dummy element
     # species.append('Md') # symbol of dummy element
     # matrices.append(np.eye(4)) # identity matrix
@@ -375,7 +375,7 @@ def build_crystal_graph(crystal, graph_method='crystalnn'):
             crystal_graph = StructureGraph.with_local_env_strategy(
                 crystal, CrystalNN)
         except:
-            # TODO: make it 10 for perov and 14 for mp20
+            # TODO: make it 10 for perov and 20 for mp20
             crystalNN_tmp = local_env.CrystalNN(distance_cutoffs=None, x_diff_weight=-1, porous_adjustment=False, search_cutoff=20)
             crystal_graph = StructureGraph.with_local_env_strategy(
                 crystal, crystalNN_tmp) 
@@ -1369,6 +1369,17 @@ def process_one(row, niggli, primitive, graph_method, prop_list, use_space_group
     lattice_ks = lattice_to_ks(lattice_matrix)
     result_dict = {}
     if use_space_group:
+    #     to generate crystals only of a particular spacegroup (here, 71)
+    #     spga = SpacegroupAnalyzer(crystal, symprec=tol)
+    #     crystal = spga.get_refined_structure() 
+    #     pyx = pyxtal()
+    #     try:
+    #         pyx.from_seed(crystal, tol=0.01)
+    #     except:
+    #         pyx.from_seed(crystal, tol=0.0001)
+    #     space_group = pyx.group.number
+    #     if not space_group == 71:
+    #         return None
         crystal, sym_info, dummy_repr_ind, dummy_origin_ind = get_symmetry_info(crystal, tol = tol, num_repr = num_repr, use_random_repr = use_random_repr)
         result_dict.update(sym_info)
 

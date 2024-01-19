@@ -71,53 +71,6 @@ class CrystDataset(Dataset):
         (frac_coords, atom_types, lengths, angles, ks, edge_indices,
          to_jimages, num_atoms) = data_dict['graph_arrays']
 
-        # # processing to add dummy representatives after graph creation (ineffective and not necessary)
-        # current_representatives = len(frac_coords) - 1
-        # dummy_atom_type = atom_types[-1]
-        # site_symm_binary = data_dict['site_symm_binary']
-        # trivial_site_symm = np.zeros(22)
-        # trivial_site_symm[0] = 1 # inversion
-        # trivial_site_symm[2] = 1 # rotation
-        # trivial_site_symm[7] = 1 # mirror plane
-        # trivial_site_symm[9] = 1 # screw translation
-        # trivial_site_symm[15] = 1 # glide plane
-        # trivial_site_symm = np.hstack([trivial_site_symm, trivial_site_symm, trivial_site_symm])
-
-        # if current_representatives < self.number_representatives:
-        #     print("Adding dummy representatives after crystal graph creation")
-        #     # insert dummy representatives (if it was not added during preprocessing dataset in data_utils.py)
-        #     new_node_id = num_atoms
-        #     for _ in range(self.number_representatives - current_representatives):
-        #         if self.use_random_representatives:
-        #             # sample a random coordinate from a uniform distribution
-        #             frac_coords = np.vstack([frac_coords, np.random.uniform(size=3)]) # doesn't matter
-        #             atom_types = np.hstack([atom_types, dummy_atom_type])
-        #             site_symm_binary = np.vstack([site_symm_binary, trivial_site_symm]) # doesn't matter
-        #             num_atoms += 1
-                    
-        #             # connect this node to all other nodes
-        #             # add edges in [new_node_id, i] format
-        #             new_edges_for_new_node = np.vstack([np.arange(num_atoms-1), np.ones(num_atoms-1)*new_node_id]).T
-        #             # add to_jimages in [0, 0, 0] format
-        #             to_jimages = np.vstack([to_jimages, np.zeros((num_atoms-1, 3))])
-        #             edge_indices = np.vstack([edge_indices, new_edges_for_new_node])
-                    
-        #         else:
-        #             random_index = np.random.randint(0, current_representatives)
-        #             frac_coords = np.vstack([frac_coords, frac_coords[random_index]])
-        #             atom_types = np.hstack([atom_types, dummy_atom_type])
-        #             # add to data dict site symmetry
-        #             site_symm_binary = np.vstack([site_symm_binary, data_dict['site_symm_binary'][random_index]])
-        #             num_atoms += 1
-                    
-        #             # add the corresponding edge_indices
-        #             edges_connected = edge_indices[np.any(edge_indices == random_index, axis=1)]
-        #             new_edges_for_new_node = np.where(edges_connected == random_index, new_node_id, edges_connected)
-                    
-        #             # add jimages corresponding to the new edges
-        #             to_jimages = np.vstack([to_jimages, to_jimages[np.any(edge_indices == random_index, axis=1)]])
-        #             edge_indices = np.vstack([edge_indices, new_edges_for_new_node])
-
         # atom_coords are fractional coordinates
         # edge_index is incremented during batching
         # https://pytorch-geometric.readthedocs.io/en/latest/notes/batching.html
@@ -145,8 +98,7 @@ class CrystDataset(Dataset):
             data.sg_condition = torch.Tensor(data_dict['sg_binary'])
             data.site_symm = torch.Tensor(data_dict['site_symm_binary'])
             
-            data.dummy_origin_ind = torch.Tensor([data_dict['dummy_origin_ind']])
-            data.dummy_repr_ind = torch.Tensor([data_dict['dummy_repr_ind']])
+            data.dummy_repr_ind = torch.Tensor([data_dict['dummy_repr_ind']]).reshape(-1, 1)
 
         assert len(data.site_symm) == len(data.frac_coords) == len(data.site_symm), breakpoint()
         if self.use_pos_index:

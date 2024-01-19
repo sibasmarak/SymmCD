@@ -11,7 +11,7 @@ import time
 import argparse
 import torch
 
-from collections import Counter
+from collections import Counter, defaultdict
 
 from tqdm import tqdm
 from torch.optim import Adam
@@ -125,7 +125,7 @@ class SampleDataset(Dataset):
         self.additional_test = torch.load(test_ori_path)
         self.additional_test_len = len(self.additional_test)
         
-        sg_counter = Counter()
+        sg_counter = defaultdict(lambda : 0)
         sg_number_binary_mapper = {}
         for i in range(self.additional_test_len):
             sg_counter[self.additional_test[i]['spacegroup']] += 1
@@ -145,7 +145,7 @@ class SampleDataset(Dataset):
 
     def __getitem__(self, index):
         # grounded way to obtain number of atoms/representatives rather than defining distribution
-        num_atom = self.num_repr + 1 # self.additional_test[index%self.additional_test_len]['graph_arrays'][-1]
+        num_atom = self.num_repr # self.additional_test[index%self.additional_test_len]['graph_arrays'][-1]
 
         spacegroup = np.random.choice(230, p = self.sg_dist) + 1
         data = Data(

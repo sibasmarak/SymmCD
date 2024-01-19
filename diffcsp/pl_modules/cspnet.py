@@ -132,7 +132,7 @@ class CSPNet(nn.Module):
             self.node_embedding = nn.Linear(max_atoms, hidden_dim)
         else:
             self.node_embedding = nn.Embedding(max_atoms, hidden_dim)
-        self.site_symm_embedding = build_mlp(in_dim=66, hidden_dim=128, fc_num_layers=2, out_dim=latent_dim)
+        self.site_symm_embedding = nn.Linear(66, latent_dim)
         site_symm_dim = latent_dim if self.use_site_symm else 0
         lattice_dim = 9 if self.ip else 6
         frac_coord_dim = 3 if self.use_gt_frac_coords else 0

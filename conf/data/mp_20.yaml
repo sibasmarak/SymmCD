@@ -16,8 +16,8 @@ tolerance: 0.1
 
 use_space_group: true
 use_pos_index: false
-number_representatives: 20
-use_random_representatives: false
+number_representatives: 20 # if set to 0, no dummy representatives are added
+use_random_representatives: false # irrelevant
 
 train_max_epochs: 1000
 early_stopping_patience: 100000

@@ -12,19 +12,17 @@
 module load anaconda/3
 conda activate diffcsp
 
-# training perov
-HYDRA_FULL_ERROR=1 python diffcsp/run.py expname=mp_20_dataset \
-data=mp_20 data.use_random_representatives=True data.number_representatives=20 \
+# training
+HYDRA_FULL_ERROR=1 python diffcsp/run.py expname=perov data=perov \
 logging.wandb.mode=offline logging.wandb.project=diffcsp_symmetry logging.val_check_interval=1 \
-model.decoder.hidden_dim=512 model.decoder.num_layers=8 \
-model=diffusion_w_site_symm model.use_ks=True model.ip=False model.use_gt_frac_coords=True model.use_site_symm=True
+model=diffusion_w_site_symm model.use_ks=False model.ip=True model.use_gt_frac_coords=False model.use_site_symm=False \
+model.decoder.hidden_dim=256 model.decoder.num_layers=4
 
-# generating eval_gen.pt (for Table 4 in DiffCSP paper)
-# 2023-12-17/ contains the correct results for with origin as a dummy or using frac coords for perov 
-python scripts/generation.py --model_path /home/mila/s/siba-smarak.panigrahi/scratch/DiffCSP/hydra/singlerun/2024-01-11/mp_20_temporary --dataset mp --label final_num_samples_20
-python scripts/compute_metrics.py --root_path /home/mila/s/siba-smarak.panigrahi/scratch/DiffCSP/hydra/singlerun/2024-01-11/mp_20_temporary --tasks gen --gt_file data/mp_20/test.csv --label final_num_samples_20
+# generating eval_gen.pt (for Table 4 in DiffCSP paper, ab-initio generation) 
+# python scripts/generation.py --model_path /home/mila/s/siba-smarak.panigrahi/scratch/DiffCSP/hydra/singlerun/2024-01-18/perov --dataset perov --label final_num_samples_20 --batch_size 500
+# python scripts/compute_metrics.py --root_path /home/mila/s/siba-smarak.panigrahi/scratch/DiffCSP/hydra/singlerun/2024-01-18/perov --tasks gen --gt_file data/perov_5/test.csv --label final_num_samples_20
 
-# generating eval_diff.pt (for Table 1 in DiffCSP paper)
+# generating eval_diff.pt (for Table 1 in DiffCSP paper, crystal structure prediction (csp) task)
 # python scripts/evaluate.py --model_path <path-of-run> --label num_samples_1
 # python scripts/compute_metrics.py --root_path <path-of-run> --tasks csp --gt_file data/perov_5/test.csv --label num_samples_1
 
