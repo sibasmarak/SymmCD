@@ -44,7 +44,7 @@ def find_num_atoms(dummy_ind, total_num_atoms):
     return torch.tensor(actual_num_atoms)
 
 def split_argmax_sitesymm(site_symm:torch.Tensor) -> np.ndarray:
-    # site_symm : num_repr x 66
+    # site_symm : num_repr x 27
     return np.array(np.abs(1 - site_symm.cpu().detach().numpy()) < 0.1, dtype=float)
 
 
@@ -105,7 +105,7 @@ def modify_frac_coords(traj:Dict, spacegroups:List[int], num_repr:List[int]) -> 
             # this might happen if we predict a crystal with only dummy representative atoms
             new_frac_coords, new_num_atoms, new_atom_types = modify_frac_coords_one(
                     traj['frac_coords'][total_atoms:total_atoms+num_repr[index]], # num_repr x 3
-                    traj['site_symm'][total_atoms:total_atoms+num_repr[index]], # num_repr x 66
+                    traj['site_symm'][total_atoms:total_atoms+num_repr[index]], # num_repr x 27
                     traj['atom_types'][total_atoms:total_atoms+num_repr[index]], # num_repr x 100
                     spacegroups[index], 
                 )
@@ -177,7 +177,7 @@ class CSPDiffusion(BaseModule):
         self.sigma_scheduler = hydra.utils.instantiate(self.hparams.sigma_scheduler)
         self.time_dim = self.hparams.time_dim
         self.time_embedding = SinusoidalTimeEmbeddings(self.time_dim)
-        self.spacegroup_embedding = build_mlp(in_dim=66, hidden_dim=128, fc_num_layers=2, out_dim=self.time_dim)
+        self.spacegroup_embedding = build_mlp(in_dim=73, hidden_dim=128, fc_num_layers=2, out_dim=self.time_dim)
         self.keep_lattice = self.hparams.cost_lattice < 1e-5
         self.keep_coords = self.hparams.cost_coord < 1e-5
         self.use_ks = self.hparams.use_ks
@@ -190,7 +190,7 @@ class CSPDiffusion(BaseModule):
         dummy_repr_ind = batch.dummy_repr_ind
         
         times = self.beta_scheduler.uniform_sample_t(batch_size, self.device)
-        time_emb = self.time_embedding(times) + self.spacegroup_embedding(batch.sg_condition.reshape(-1, 66))
+        time_emb = self.time_embedding(times) + self.spacegroup_embedding(batch.sg_condition.reshape(-1, 73))
 
         alphas_cumprod = self.beta_scheduler.alphas_cumprod[times]
         beta = self.beta_scheduler.betas[times]
@@ -293,7 +293,7 @@ class CSPDiffusion(BaseModule):
             k_T = torch.zeros([batch_size, 6]).to(self.device) # not used
         x_T = torch.rand([batch.num_nodes, 3]).to(self.device)
         t_T = torch.randn([batch.num_nodes, MAX_ATOMIC_NUM]).to(self.device)
-        symm_T = torch.randn([batch.num_nodes, 66]).to(self.device)
+        symm_T = torch.randn([batch.num_nodes, 27]).to(self.device)
 
         if self.keep_coords:
             x_T = batch.frac_coords
@@ -316,7 +316,7 @@ class CSPDiffusion(BaseModule):
 
             times = torch.full((batch_size, ), t, device = self.device)
 
-            time_emb = self.time_embedding(times) + self.spacegroup_embedding(batch.sg_condition.reshape(-1, 66))
+            time_emb = self.time_embedding(times) + self.spacegroup_embedding(batch.sg_condition.reshape(-1, 73))
             
             alphas = self.beta_scheduler.alphas[t]
             alphas_cumprod = self.beta_scheduler.alphas_cumprod[t]

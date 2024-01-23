@@ -69,7 +69,15 @@ OFFSET_LIST = [
 ]
 
 EPSILON = 1e-5
-
+LATTICE_MAPPER = {
+    "P": 0,
+    "I": 1,
+    "F": 2,
+    "A": 3,
+    "B": 4,
+    "C": 5,
+    "R": 6,
+}
 chemical_symbols = [
     # 0
     'X', # 1
@@ -190,8 +198,12 @@ def refine_spacegroup(crystal, tol=0.01):
 def get_site_symmetry_binary_repr(notation:str, label:str = None):
     """Get the binary representation of the site symmetry."""
 
-    # split with respect to the ' ' character, ignore the crystal lattice type
-    if not label: notation = notation.split(' ')[1:]
+    # split with respect to the ' ' character
+    lattice_type = None
+    if not label: 
+        notation = notation.split(' ')
+        lattice_type = LATTICE_MAPPER[notation[0]]
+        notation = notation[1:]
     else: notation = notation.split(' ')
 
     if len(notation) < 3:
@@ -200,7 +212,6 @@ def get_site_symmetry_binary_repr(notation:str, label:str = None):
 
     axis_wise_binary_repr = []
     for axis_symm in notation:
-        binary_repr = torch.zeros(22)
         # initialize the binary representation
         translation = 0
         rotation = 1
@@ -270,14 +281,30 @@ def get_site_symmetry_binary_repr(notation:str, label:str = None):
 
         # fill the binary representation in one-hot fashion
         # binary_repr = [0, 1, 1, 2, 3, 4, 6, 0, 1, 0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5, 6] # [inversion (2), rotation (5), reflection (2), translation (6), glide (7)]
-        binary_repr[0 + inversion] = 1
-        if rotation <= 4: binary_repr[1 + rotation] = 1
-        elif rotation == 6: binary_repr[6] = 1
-        binary_repr[7 + reflection] = 1
-        binary_repr[9 + translation] = 1
-        binary_repr[15 + glide] = 1
+        if not label:
+            # for spacegroup, we need translation and glide
+            binary_repr = torch.zeros(22)
+            binary_repr[0 + inversion] = 1
+            if rotation <= 4: binary_repr[1 + rotation] = 1
+            elif rotation == 6: binary_repr[6] = 1
+            binary_repr[7 + reflection] = 1
+            binary_repr[9 + translation] = 1
+            binary_repr[15 + glide] = 1
+        else:
+            # for site symmetry, we do not need translation and glide (since they are point groups)
+            binary_repr = torch.zeros(9)
+            binary_repr[0 + inversion] = 1
+            if rotation <= 4: binary_repr[1 + rotation] = 1
+            elif rotation == 6: binary_repr[6] = 1
+            binary_repr[7 + reflection] = 1
 
         axis_wise_binary_repr.append(binary_repr)
+
+    if lattice_type is not None:
+        # for spacegroup HM notations, total length of binary repr becomes 7 + 66 = 73
+        lattice_type_repr = torch.zeros(7)
+        lattice_type_repr[lattice_type] = 1
+        return torch.cat([lattice_type_repr, *(axis_wise_binary_repr)], dim=0)
 
     return torch.cat(axis_wise_binary_repr, dim=0)
 
@@ -1372,17 +1399,6 @@ def process_one(row, niggli, primitive, graph_method, prop_list, use_space_group
     lattice_ks = lattice_to_ks(lattice_matrix)
     result_dict = {}
     if use_space_group:
-    #     to generate crystals only of a particular spacegroup (here, 71)
-    #     spga = SpacegroupAnalyzer(crystal, symprec=tol)
-    #     crystal = spga.get_refined_structure() 
-    #     pyx = pyxtal()
-    #     try:
-    #         pyx.from_seed(crystal, tol=0.01)
-    #     except:
-    #         pyx.from_seed(crystal, tol=0.0001)
-    #     space_group = pyx.group.number
-    #     if not space_group == 71:
-    #         return None
         crystal, sym_info, dummy_repr_ind, dummy_origin_ind = get_symmetry_info(crystal, tol = tol, num_repr = num_repr, use_random_repr = use_random_repr)
         result_dict.update(sym_info)
 
