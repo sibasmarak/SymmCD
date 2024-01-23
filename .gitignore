@@ -164,3 +164,5 @@ output/
 cdvae
 hydra/singlerun/
 scripts/logs/
+.DS_Store
+*.out
