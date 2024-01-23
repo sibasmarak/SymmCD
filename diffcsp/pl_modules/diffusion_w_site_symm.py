@@ -1,5 +1,5 @@
 import math, copy
-
+import json
 import numpy as np
 
 import torch
@@ -30,6 +30,7 @@ from diffcsp.pl_modules.diff_utils import d_log_p_wrapped_normal
 from diffcsp.pl_modules.model import build_mlp
 
 MAX_ATOMIC_NUM=101
+CLUSTERED_SITES = json.load(open('/home/mila/s/siba-smarak.panigrahi/DiffCSP/cluster_sites.json', 'r'))
 
 def find_num_atoms(dummy_ind, total_num_atoms):
     # num_atoms states how many atoms are there in each crystal (num_repr + dummy origin)
@@ -58,7 +59,7 @@ def modify_frac_coords_one(frac_coords, site_symm, atom_types, spacegroup):
     wp_to_binary = dict()
     for wp in Group(spacegroup).Wyckoff_positions:
         wp.get_site_symmetry()
-        wp_to_binary[wp] = get_site_symmetry_binary_repr(wp.site_symm, label=wp.get_label()).numpy()
+        wp_to_binary[wp] = get_site_symmetry_binary_repr(CLUSTERED_SITES[wp.site_symm], label=wp.get_label()).numpy()
      
      
     # iterate over frac coords and corresponding site-symm
@@ -171,12 +172,12 @@ class CSPDiffusion(BaseModule):
         
         # NOTE: set pred_site_symm_type to True to generate site symmetries also (set it to False to behave as DiffCSP)
         # pred_type is set to True to generate atom types
-        self.decoder = hydra.utils.instantiate(self.hparams.decoder, latent_dim = self.hparams.latent_dim + self.hparams.time_dim, pred_type = True, pred_site_symm_type = False, smooth = True, max_atoms=MAX_ATOMIC_NUM)
+        self.decoder = hydra.utils.instantiate(self.hparams.decoder, latent_dim = self.hparams.latent_dim + self.hparams.time_dim, pred_type = True, pred_site_symm_type = True, smooth = True, max_atoms=MAX_ATOMIC_NUM)
         self.beta_scheduler = hydra.utils.instantiate(self.hparams.beta_scheduler)
         self.sigma_scheduler = hydra.utils.instantiate(self.hparams.sigma_scheduler)
         self.time_dim = self.hparams.time_dim
         self.time_embedding = SinusoidalTimeEmbeddings(self.time_dim)
-        self.spacegroup_embedding = build_mlp(in_dim=66, hidden_dim=128, fc_num_layers=2, out_dim=self.time_dim) # nn.Embedding(66, self.time_dim)
+        self.spacegroup_embedding = build_mlp(in_dim=66, hidden_dim=128, fc_num_layers=2, out_dim=self.time_dim)
         self.keep_lattice = self.hparams.cost_lattice < 1e-5
         self.keep_coords = self.hparams.cost_coord < 1e-5
         self.use_ks = self.hparams.use_ks
@@ -189,7 +190,7 @@ class CSPDiffusion(BaseModule):
         dummy_repr_ind = batch.dummy_repr_ind
         
         times = self.beta_scheduler.uniform_sample_t(batch_size, self.device)
-        time_emb = self.time_embedding(times) # + self.spacegroup_embedding(batch.sg_condition.reshape(-1, 66))
+        time_emb = self.time_embedding(times) + self.spacegroup_embedding(batch.sg_condition.reshape(-1, 66))
 
         alphas_cumprod = self.beta_scheduler.alphas_cumprod[times]
         beta = self.beta_scheduler.betas[times]
@@ -226,13 +227,13 @@ class CSPDiffusion(BaseModule):
         input_frac_coords = (frac_coords + sigmas_per_atom * rand_x) % 1.
 
         gt_atom_types_onehot = F.one_hot(batch.atom_types - 1, num_classes=MAX_ATOMIC_NUM).float()
-        # gt_site_symm_binary = batch.site_symm
+        gt_site_symm_binary = batch.site_symm
 
         rand_t = torch.randn_like(gt_atom_types_onehot)
-        # rand_symm = torch.randn_like(gt_site_symm_binary)
+        rand_symm = torch.randn_like(gt_site_symm_binary)
 
         atom_type_probs = (c0.repeat_interleave(batch.num_atoms)[:, None] * gt_atom_types_onehot + c1.repeat_interleave(batch.num_atoms)[:, None] * rand_t)
-        # site_symm_probs = (c0.repeat_interleave(batch.num_atoms)[:, None] * gt_site_symm_binary + c1.repeat_interleave(batch.num_atoms)[:, None] * rand_symm)
+        site_symm_probs = (c0.repeat_interleave(batch.num_atoms)[:, None] * gt_site_symm_binary + c1.repeat_interleave(batch.num_atoms)[:, None] * rand_symm)
 
         if self.keep_coords:
             input_frac_coords = frac_coords
@@ -243,27 +244,29 @@ class CSPDiffusion(BaseModule):
 
         # pass noised site symmetries and behave similar to atom type probs
         lattice_feats = input_ks if self.use_ks else input_lattice
-        pred_lattice, pred_x, pred_t = self.decoder(time_emb, atom_type_probs, input_frac_coords, 
+        pred_lattice, pred_x, pred_t, pred_symm = self.decoder(time_emb, atom_type_probs, input_frac_coords, 
                                                     lattice_feats, input_lattice, batch.num_atoms, 
-                                                    batch.batch, site_symm_probs=None)
+                                                    batch.batch, site_symm_probs=site_symm_probs)
 
         tar_x = d_log_p_wrapped_normal(sigmas_per_atom * rand_x, sigmas_per_atom) / torch.sqrt(sigmas_norm_per_atom)
 
         
         loss_lattice = F.mse_loss(pred_lattice, ks_mask * rand_ks) if self.use_ks else F.mse_loss(pred_lattice, rand_l)
 
-        loss_coord = F.mse_loss(pred_x * (1 - dummy_repr_ind), tar_x * (1 - dummy_repr_ind))
+        # loss_coord = F.mse_loss(pred_x * (1 - dummy_repr_ind), tar_x * (1 - dummy_repr_ind))
+        loss_coord = F.mse_loss(pred_x, tar_x)
         
         loss_type = F.mse_loss(pred_t, rand_t)
         
         # loss_symm = F.mse_loss(pred_symm * (1 - dummy_repr_ind), rand_symm * (1 - dummy_repr_ind))
+        loss_symm = F.mse_loss(pred_symm, rand_symm)
     
 
         loss = (
             self.hparams.cost_lattice * loss_lattice +
             self.hparams.cost_coord * loss_coord + 
-            self.hparams.cost_type * loss_type
-            # self.hparams.cost_symm * loss_symm
+            self.hparams.cost_type * loss_type +
+            self.hparams.cost_symm * loss_symm
         )
 
         return {
@@ -271,7 +274,7 @@ class CSPDiffusion(BaseModule):
             'loss_lattice' : loss_lattice,
             'loss_coord' : loss_coord,
             'loss_type' : loss_type,
-            # 'loss_symm' : loss_symm,
+            'loss_symm' : loss_symm,
         }
 
     @torch.no_grad()
@@ -313,7 +316,7 @@ class CSPDiffusion(BaseModule):
 
             times = torch.full((batch_size, ), t, device = self.device)
 
-            time_emb = self.time_embedding(times) # + self.spacegroup_embedding(batch.sg_condition.reshape(-1, 66))
+            time_emb = self.time_embedding(times) + self.spacegroup_embedding(batch.sg_condition.reshape(-1, 66))
             
             alphas = self.beta_scheduler.alphas[t]
             alphas_cumprod = self.beta_scheduler.alphas_cumprod[t]
@@ -345,16 +348,16 @@ class CSPDiffusion(BaseModule):
             else:
                 rand_l = torch.randn_like(l_T) if t > 1 else torch.zeros_like(l_T)
             rand_t = torch.randn_like(t_T) if t > 1 else torch.zeros_like(t_T)
-            # rand_symm = torch.randn_like(symm_T) if t > 1 else torch.zeros_like(symm_T)
+            rand_symm = torch.randn_like(symm_T) if t > 1 else torch.zeros_like(symm_T)
             rand_x = torch.randn_like(x_T) if t > 1 else torch.zeros_like(x_T)
 
             step_size = step_lr * (sigma_x / self.sigma_scheduler.sigma_begin) ** 2
             std_x = torch.sqrt(2 * step_size)
 
             lattice_feats_t = k_t if self.use_ks else l_t
-            _, pred_x, _ = self.decoder(time_emb, t_t, x_t, 
+            _, pred_x, _, _ = self.decoder(time_emb, t_t, x_t, 
                                                   lattice_feats_t, l_t, batch.num_atoms, 
-                                                  batch.batch, site_symm_probs=None)
+                                                  batch.batch, site_symm_probs=symm_t)
 
             pred_x = pred_x * torch.sqrt(sigma_norm)
 
@@ -365,7 +368,7 @@ class CSPDiffusion(BaseModule):
 
             t_t_minus_05 = t_t
 
-            # symm_t_minus_05 = symm_t
+            symm_t_minus_05 = symm_t
 
 
             # Predictor
@@ -375,7 +378,7 @@ class CSPDiffusion(BaseModule):
                 rand_l = torch.randn_like(l_T) if t > 1 else torch.zeros_like(l_T)
 
             rand_t = torch.randn_like(t_T) if t > 1 else torch.zeros_like(t_T)
-            # rand_symm = torch.randn_like(symm_T) if t > 1 else torch.zeros_like(symm_T)
+            rand_symm = torch.randn_like(symm_T) if t > 1 else torch.zeros_like(symm_T)
             rand_x = torch.randn_like(x_T) if t > 1 else torch.zeros_like(x_T)
 
             adjacent_sigma_x = self.sigma_scheduler.sigmas[t-1] 
@@ -383,9 +386,9 @@ class CSPDiffusion(BaseModule):
             std_x = torch.sqrt((adjacent_sigma_x ** 2 * (sigma_x ** 2 - adjacent_sigma_x ** 2)) / (sigma_x ** 2))   
             lattice_feats_t_minus_05 = k_t_minus_05 if self.use_ks else l_t_minus_05
 
-            pred_l, pred_x, pred_t = self.decoder(time_emb, t_t_minus_05, x_t_minus_05, 
+            pred_l, pred_x, pred_t, pred_symm = self.decoder(time_emb, t_t_minus_05, x_t_minus_05, 
                                                         lattice_feats_t_minus_05, l_t_minus_05, batch.num_atoms, 
-                                                        batch.batch, site_symm_probs=None)
+                                                        batch.batch, site_symm_probs=symm_t_minus_05)
 
             pred_x = pred_x * torch.sqrt(sigma_norm)
 
@@ -401,14 +404,12 @@ class CSPDiffusion(BaseModule):
 
             t_t_minus_1 = c0 * (t_t_minus_05 - c1 * pred_t) + sigmas * rand_t
 
-            # symm_t_minus_1 = c0 * (symm_t_minus_05 - c1 * pred_symm * (1 - null_element_mask[:, None])) + sigmas * rand_symm * (1 - null_element_mask[:, None])
-            # symm_t_minus_1 = symm_t_minus_1 * (1 - null_element_mask[:, None])
+            symm_t_minus_1 = c0 * (symm_t_minus_05 - c1 * pred_symm) + sigmas * rand_symm
 
-            # symm_t_minus_1 = symm_t_minus_05
             traj[t - 1] = {
                 'num_atoms' : batch.num_atoms,
                 'atom_types' : t_t_minus_1,
-                'site_symm' : symm_t,
+                'site_symm' : symm_t_minus_1,
                 'frac_coords' : x_t_minus_1 % 1.,
                 'lattices' : l_t_minus_1,
                 'ks' : k_t_minus_1,
@@ -461,7 +462,7 @@ class CSPDiffusion(BaseModule):
         loss_lattice = output_dict['loss_lattice']
         loss_coord = output_dict['loss_coord']
         loss_type = output_dict['loss_type']
-        # loss_symm = output_dict['loss_symm']
+        loss_symm = output_dict['loss_symm']
         loss = output_dict['loss']
 
 
@@ -470,7 +471,7 @@ class CSPDiffusion(BaseModule):
             'lattice_loss': loss_lattice,
             'coord_loss': loss_coord,
             'type_loss': loss_type,
-            # 'symm_loss': loss_symm,
+            'symm_loss': loss_symm,
             },
             on_step=True,
             on_epoch=True,
@@ -512,7 +513,7 @@ class CSPDiffusion(BaseModule):
         loss_lattice = output_dict['loss_lattice']
         loss_coord = output_dict['loss_coord']
         loss_type = output_dict['loss_type']
-        # loss_symm = output_dict['loss_symm']
+        loss_symm = output_dict['loss_symm']
         loss = output_dict['loss']
 
         log_dict = {
@@ -520,7 +521,7 @@ class CSPDiffusion(BaseModule):
             f'{prefix}_lattice_loss': loss_lattice,
             f'{prefix}_coord_loss': loss_coord,
             f'{prefix}_type_loss': loss_type,
-            # f'{prefix}_symm_loss': loss_symm,
+            f'{prefix}_symm_loss': loss_symm,
         }
 
         return log_dict, loss

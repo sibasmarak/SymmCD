@@ -126,37 +126,38 @@ class SampleDataset(Dataset):
         self.additional_test_len = len(self.additional_test)
         
         sg_counter = defaultdict(lambda : 0)
+        self.sg_num_atoms = defaultdict(lambda : defaultdict(lambda : 0))
         sg_number_binary_mapper = {}
         for i in range(self.additional_test_len):
             sg_counter[self.additional_test[i]['spacegroup']] += 1
             sg_number_binary_mapper[self.additional_test[i]['spacegroup']] = self.additional_test[i]['sg_binary']
+            num_atoms = self.additional_test[i]['graph_arrays'][-1]
+            self.sg_num_atoms[self.additional_test[i]['spacegroup']][num_atoms] += 1
             
-        # convert the counter to a distribution
-        sg_dist = []
-        for i in range(1, 231):
-            sg_dist.append(sg_counter[i])
-        sg_dist = np.array(sg_dist)
-        sg_dist = sg_dist / np.sum(sg_dist)
-        self.sg_dist = sg_dist
+        # spacegroup distribution
+        self.sg_dist = []
+        for i in range(1, 231): self.sg_dist.append(sg_counter[i])
+        self.sg_dist = np.array(self.sg_dist)
+        self.sg_dist = self.sg_dist / self.additional_test_len
         self.sg_number_binary_mapper = sg_number_binary_mapper
         
+        # for each space group, atom number distribution
+        for sg in self.sg_num_atoms:
+            total = sum(self.sg_num_atoms[sg].values())
+            for num_atoms in self.sg_num_atoms[sg]: self.sg_num_atoms[sg][num_atoms] /= total
+
     def __len__(self) -> int:
         return self.total_num
 
     def __getitem__(self, index):
-        # grounded way to obtain number of atoms/representatives rather than defining distribution
-        num_atom = self.num_repr # self.additional_test[index%self.additional_test_len]['graph_arrays'][-1]
-
         spacegroup = np.random.choice(230, p = self.sg_dist) + 1
+        num_atom = np.random.choice(list(self.sg_num_atoms[spacegroup].keys()), p = list(self.sg_num_atoms[spacegroup].values()))
+        
         data = Data(
             num_atoms=torch.LongTensor([num_atom]),
             num_nodes=num_atom,
-            
-            # select a random space group
             spacegroup=spacegroup, # number
             sg_condition=self.sg_number_binary_mapper[spacegroup], # float tensor
-            # spacegroup=self.additional_test[index%self.additional_test_len]['spacegroup'],
-            # sg_condition=self.additional_test[index%self.additional_test_len]['sg_binary'],
         )
         if self.is_carbon:
             data.atom_types = torch.LongTensor([6] * num_atom)
@@ -175,7 +176,7 @@ def main(args):
     print('Evaluate the diffusion model.')
 
     test_set = SampleDataset(args.dataset, args.batch_size * args.num_batches_to_samples, 
-                             cfg.data.datamodule.datasets.test[0].save_path, cfg.data.number_representatives)
+                             cfg.data.datamodule.datasets.train.save_path, cfg.data.number_representatives)
     test_loader = DataLoader(test_set, batch_size = args.batch_size)
 
     start_time = time.time()
@@ -201,7 +202,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_path', required=True)
     parser.add_argument('--dataset', required=True)
-    parser.add_argument('--step_lr', default=1e-5, type=float)
+    parser.add_argument('--step_lr', default=1e-5, type=float, help='step size for Langevin dynamics')
     parser.add_argument('--num_batches_to_samples', default=20, type=int)
     parser.add_argument('--batch_size', default=500, type=int)
     parser.add_argument('--label', default='')

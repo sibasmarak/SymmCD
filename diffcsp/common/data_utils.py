@@ -4,6 +4,7 @@ import networkx as nx
 import scipy
 import torch
 import copy
+import json
 import itertools
 
 from pymatgen.core.structure import Structure
@@ -210,7 +211,7 @@ def get_site_symmetry_binary_repr(notation:str, label:str = None):
 
         # string processing
         if '-' in axis_symm: inversion = True # inversion
-        if '/' in axis_symm or 'm' in axis_symm: reflection = 1 # mirror plane
+        if 'm' in axis_symm: reflection = 1 # mirror plane
 
         # screw axis
         if '21' in axis_symm: 
@@ -264,6 +265,8 @@ def get_site_symmetry_binary_repr(notation:str, label:str = None):
             if 'n' in axis_symm: glide = 4
             if 'd' in axis_symm: glide = 5
             if 'e' in axis_symm: glide = 6
+            
+        if '/' in axis_symm: assert glide or reflection
 
         # fill the binary representation in one-hot fashion
         # binary_repr = [0, 1, 1, 2, 3, 4, 6, 0, 1, 0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5, 6] # [inversion (2), rotation (5), reflection (2), translation (6), glide (7)]
@@ -280,6 +283,7 @@ def get_site_symmetry_binary_repr(notation:str, label:str = None):
 
 
 def get_symmetry_info(crystal, tol=0.01, num_repr=10, use_random_repr=False):
+    cluster_sites = json.load(open('/home/mila/s/siba-smarak.panigrahi/DiffCSP/cluster_sites.json', 'r'))
     spga = SpacegroupAnalyzer(crystal, symprec=tol)
     # NOTE: this converts [x,0,0.5] -> [0, 0.5, x] (or the canonical form)
     # basically diffusion model learns the distribution of this refined structure and not the original structure
@@ -307,7 +311,7 @@ def get_symmetry_info(crystal, tol=0.01, num_repr=10, use_random_repr=False):
         anchors.append(anchor)
 
         site.wp.get_site_symmetry() # initialize the wyckoff position
-        hmwyckoffs.append(site.wp.site_symm) # HM notation of wyckoff position
+        hmwyckoffs.append(cluster_sites[site.wp.site_symm]) # HM notation of wyckoff position
         labels.append(site.wp.get_label()) # label of wyckoff position (1a, 3a, etc.)
 
         # old code from DiffCSP (generate all atoms in the orbit)
@@ -357,7 +361,6 @@ def get_symmetry_info(crystal, tol=0.01, num_repr=10, use_random_repr=False):
         coords_are_cartesian=False,
     )
     
-    # NOTE: return dummy_origin indicator and dummy_representative indicator
     if num_repr:
         dummy_origin_indicator = np.array([0] * num_repr).astype(int)
         dummy_representative_indicator = np.array([0] * gt_num_coords + [1] * (num_repr - gt_num_coords)).astype(int)
