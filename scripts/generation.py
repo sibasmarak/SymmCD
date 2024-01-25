@@ -90,6 +90,8 @@ def diffusion(loader, model, step_lr):
     num_atoms = []
     atom_types = []
     lattices = []
+    spacegroups = []
+    site_symmetries = []
     input_data_list = []
     for idx, batch in enumerate(loader):
 
@@ -101,15 +103,19 @@ def diffusion(loader, model, step_lr):
         num_atoms.append(outputs['num_atoms'].detach().cpu())
         atom_types.append(outputs['atom_types'].detach().cpu())
         lattices.append(outputs['lattices'].detach().cpu())
+        spacegroups.append(outputs['spacegroup'].detach().cpu())
+        site_symmetries.append(outputs['site_symm'].detach().cpu())
 
     frac_coords = torch.cat(frac_coords, dim=0)
     num_atoms = torch.cat(num_atoms, dim=0)
     atom_types = torch.cat(atom_types, dim=0)
     lattices = torch.cat(lattices, dim=0)
+    spacegroups = torch.cat(spacegroups, dim=0)
+    site_symmetries = torch.cat(site_symmetries, dim=0)
     lengths, angles = lattices_to_params_shape(lattices)
 
     return (
-        frac_coords, atom_types, lattices, lengths, angles, num_atoms
+        frac_coords, atom_types, lattices, lengths, angles, num_atoms, spacegroups, site_symmetries
     )
 
 class SampleDataset(Dataset):
@@ -180,7 +186,7 @@ def main(args):
     test_loader = DataLoader(test_set, batch_size = args.batch_size)
 
     start_time = time.time()
-    (frac_coords, atom_types, lattices, lengths, angles, num_atoms) = diffusion(test_loader, model, args.step_lr)
+    (frac_coords, atom_types, lattices, lengths, angles, num_atoms, spacegroups, site_symmetries) = diffusion(test_loader, model, args.step_lr)
 
     if args.label == '':
         gen_out_name = 'eval_gen.pt'
@@ -194,6 +200,8 @@ def main(args):
         'atom_types': atom_types,
         'lengths': lengths,
         'angles': angles,
+        'spacegroups': spacegroups,
+        'site_symmetries': site_symmetries,
     }, model_path / gen_out_name)
       
 

@@ -331,12 +331,18 @@ def get_symmetry_info(crystal, tol=0.01, num_repr=10, use_random_repr=False):
         specie = site.specie
         anchor = len(matrices)
         coord = site.position
-        
+
         coords.append(coord)
         species.append(specie)
         matrices.append(site.wp[0].affine_matrix)
         anchors.append(anchor)
 
+        # to select random representatives (instead of zeroth representative)
+        # orbit_size = len(site.wp)
+        # idx = np.random.randint(orbit_size)
+        # coords.append(site.wp[idx].operate(coord))
+        # matrices.append(site.wp[idx].affine_matrix)
+        
         site.wp.get_site_symmetry() # initialize the wyckoff position
         hmwyckoffs.append(cluster_sites[site.wp.site_symm]) # HM notation of wyckoff position
         labels.append(site.wp.get_label()) # label of wyckoff position (1a, 3a, etc.)

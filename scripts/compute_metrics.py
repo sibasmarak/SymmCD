@@ -356,7 +356,11 @@ def get_crystal_array_list(file_path, batch_idx=0):
             data['atom_types'],
             data['lengths'],
             data['angles'],
-            data['num_atoms'])        
+            data['num_atoms'],
+            **{
+                'spacegroups': data['spacegroups'],
+                'site_symmetries': data['site_symmetries']
+            })        
     else:
         crys_array_list = get_crystals_list(
             data['frac_coords'][batch_idx],

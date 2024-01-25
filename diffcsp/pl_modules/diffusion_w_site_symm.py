@@ -45,7 +45,25 @@ def find_num_atoms(dummy_ind, total_num_atoms):
 
 def split_argmax_sitesymm(site_symm:torch.Tensor) -> np.ndarray:
     # site_symm : num_repr x 27
-    return np.array(np.abs(1 - site_symm.cpu().detach().numpy()) < 0.1, dtype=float)
+    site_symm = torch.sigmoid(site_symm).reshape(-1, 3, 9)
+    # Initialize the result tensor with zeros
+    result = torch.zeros_like(site_symm, dtype=torch.int64)
+
+    # Compute argmax indices for each part
+    argmax1 = site_symm[..., :2].argmax(dim=-1)
+    argmax2 = site_symm[..., 2:7].argmax(dim=-1) + 2  # offset by 2
+    argmax3 = site_symm[..., 7:].argmax(dim=-1) + 7  # offset by 7
+
+    # Expanding dimensions to use for advanced indexing
+    batch_range = torch.arange(site_symm.size(0)).unsqueeze(-1).unsqueeze(-1).expand(-1, site_symm.size(1), -1)
+    row_range = torch.arange(site_symm.size(1)).unsqueeze(0).unsqueeze(-1).expand(site_symm.size(0), -1, -1)
+
+    # Update the result tensor using advanced indexing
+    result[batch_range, row_range, argmax1.unsqueeze(-1)] = 1
+    result[batch_range, row_range, argmax2.unsqueeze(-1)] = 1
+    result[batch_range, row_range, argmax3.unsqueeze(-1)] = 1
+
+    return result.cpu().detach().numpy().reshape(-1, 27)
 
 
 def modify_frac_coords_one(frac_coords, site_symm, atom_types, spacegroup):
@@ -63,7 +81,7 @@ def modify_frac_coords_one(frac_coords, site_symm, atom_types, spacegroup):
      
      
     # iterate over frac coords and corresponding site-symm
-    new_frac_coords, new_atom_types = [], []
+    new_frac_coords, new_atom_types, new_site_symm = [], [], []
     for (sym, frac_coord, atm_type) in zip(site_symm_argmax, frac_coords, atom_types):
         frac_coord = frac_coord.cpu().detach().numpy()
         
@@ -71,26 +89,32 @@ def modify_frac_coords_one(frac_coords, site_symm, atom_types, spacegroup):
         closes = []   
         for wp, binary in wp_to_binary.items():
             if np.sum(np.equal(binary, sym)) == sym.shape[-1]:
-                close = search_cloest_wp(Group(spacegroup), wp, wp.ops[0], frac_coord)
-                closes.append((close, wp, np.linalg.norm(np.minimum((close - frac_coord)%1., (frac_coord - close)%1.))))
+                for orbit_index in range(1):
+                    close = search_cloest_wp(Group(spacegroup), wp, wp.ops[orbit_index], frac_coord)
+                    closes.append((close, wp, orbit_index, np.linalg.norm(np.minimum((close - frac_coord)%1., (frac_coord - close)%1.))))
         try:
             # pick the nearest wp to project
             closest = sorted(closes, key=lambda x: x[-1])[0]
             wyckoff = closest[1]
+            repr_index = closest[2]
             
             # use wp operations on frac_coord
             frac_coord = closest[0]
             for index in range(len(wyckoff)): 
-                new_frac_coords.append(wyckoff[index].operate(frac_coord)%1.)
+                # new_frac_coords.append(wyckoff[index].operate(frac_coord)%1.)
+                new_frac_coords.append(wyckoff[(index + repr_index) % len(wyckoff)].operate(frac_coord)%1.)
                 new_atom_types.append(atm_type.cpu().detach().numpy())
+                new_site_symm.append(sym)
         except:
             print('Weird things happen, and I did not predict correctly')
             new_frac_coords.append(frac_coord)
             new_atom_types.append(atm_type.cpu().detach().numpy())
+            new_site_symm.append(sym)
         
     new_frac_coords = np.stack(new_frac_coords)
     new_atom_types = np.stack(new_atom_types)
-    return new_frac_coords, len(new_frac_coords), new_atom_types
+    new_site_symm = np.stack(new_site_symm)
+    return new_frac_coords, len(new_frac_coords), new_atom_types, new_site_symm
 
 def modify_frac_coords(traj:Dict, spacegroups:List[int], num_repr:List[int]) -> Dict:
     device = traj['frac_coords'].device
@@ -98,12 +122,13 @@ def modify_frac_coords(traj:Dict, spacegroups:List[int], num_repr:List[int]) -> 
     updated_frac_coords = []
     updated_num_atoms = []
     updated_atom_types = []
+    updated_site_symm = []
     
     for index in range(len(num_repr)):
         if num_repr[index] > 0:
             # if something is predicted, otherwise it is an empty crystal which we are post-processing
             # this might happen if we predict a crystal with only dummy representative atoms
-            new_frac_coords, new_num_atoms, new_atom_types = modify_frac_coords_one(
+            new_frac_coords, new_num_atoms, new_atom_types, new_site_sym = modify_frac_coords_one(
                     traj['frac_coords'][total_atoms:total_atoms+num_repr[index]], # num_repr x 3
                     traj['site_symm'][total_atoms:total_atoms+num_repr[index]], # num_repr x 27
                     traj['atom_types'][total_atoms:total_atoms+num_repr[index]], # num_repr x 100
@@ -113,12 +138,14 @@ def modify_frac_coords(traj:Dict, spacegroups:List[int], num_repr:List[int]) -> 
             updated_frac_coords.append(new_frac_coords)
             updated_num_atoms.append(new_num_atoms)
             updated_atom_types.append(new_atom_types)
+            updated_site_symm.append(new_site_sym)
         
         total_atoms += num_repr[index]
     
     traj['frac_coords'] = torch.cat([torch.from_numpy(x) for x in updated_frac_coords]).to(device)
     traj['atom_types'] = torch.cat([torch.from_numpy(x) for x in updated_atom_types]).to(device)
     traj['num_atoms'] = torch.tensor(updated_num_atoms).to(device)
+    traj['site_symm'] = torch.cat([torch.from_numpy(x) for x in updated_site_symm]).to(device)
     
     return traj
 
