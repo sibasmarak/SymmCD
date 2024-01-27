@@ -4,7 +4,7 @@ import torch
 import pandas as pd
 from omegaconf import ValueNode
 from torch.utils.data import Dataset
-import os
+import os, random
 from torch_geometric.data import Data
 import pickle
 import numpy as np
@@ -74,6 +74,23 @@ class CrystDataset(Dataset):
         # atom_coords are fractional coordinates
         # edge_index is incremented during batching
         # https://pytorch-geometric.readthedocs.io/en/latest/notes/batching.html
+
+        # masking on the basis of identifiers of orbits in a crystal
+        identifiers = data_dict['identifier']
+        # find a single representative for each identifier which can then mask
+        mask = np.zeros_like(identifiers)
+
+        # Process each unique identifier
+        for identifier in np.unique(identifiers):
+            # Find indices where this identifier occurs
+            indices = np.where(identifiers == identifier)[0]
+            # Randomly select one index and set it to 1 in the mask tensor
+            mask[random.choice(indices)] = 1
+            
+        frac_coords = frac_coords[mask.astype(bool)]
+        atom_types = atom_types[mask.astype(bool)]
+        num_atoms = len(frac_coords)
+
         data = Data(
             frac_coords=torch.Tensor(frac_coords),
             atom_types=torch.LongTensor(atom_types),
@@ -93,14 +110,21 @@ class CrystDataset(Dataset):
             data.spacegroup = torch.LongTensor([data_dict['spacegroup']])
             data.ops = torch.Tensor(data_dict['wyckoff_ops'])
             data.anchor_index = torch.LongTensor(data_dict['anchors'])
-            data.number_repsentatives = torch.LongTensor([data_dict['number_representatives']])
+            data.number_repsentatives = torch.LongTensor([num_atoms]) # torch.LongTensor([data_dict['number_representatives']])
 
             data.sg_condition = torch.Tensor(data_dict['sg_binary'])
-            data.site_symm = torch.Tensor(data_dict['site_symm_binary'])
+            data.site_symm = torch.Tensor(data_dict['site_symm_binary'])[mask.astype(bool)]
             
             data.dummy_repr_ind = torch.Tensor([data_dict['dummy_repr_ind']]).reshape(-1, 1)
+            
+            # compute position loss coefficient (basically, the multiplicity of each orbit)
+            identifiers_torch = torch.tensor(data_dict['identifier'])
+            changes = torch.where(torch.diff(identifiers_torch) != 0)[0] + 1
+            changes = torch.cat((torch.tensor([0]), changes, torch.tensor([len(identifiers_torch)])))
+            consecutive_counts_torch = torch.diff(changes)
+            data.x_loss_coeff = consecutive_counts_torch.reshape(-1, 1)
 
-        assert len(data.site_symm) == len(data.frac_coords) == len(data.site_symm), breakpoint()
+        assert len(data.site_symm) == len(data.frac_coords) == len(data.atom_types) == len(data.x_loss_coeff), breakpoint()
         if self.use_pos_index:
             pos_dic = {}
             indexes = []

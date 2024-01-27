@@ -327,41 +327,30 @@ def get_symmetry_info(crystal, tol=0.01, num_repr=10, use_random_repr=False):
     coords = []
     hmwyckoffs = []
     labels = []
-    for site in pyx.atom_sites:
+    identifier = []
+    for id, site in enumerate(pyx.atom_sites):
         specie = site.specie
         anchor = len(matrices)
         coord = site.position
 
-        coords.append(coord)
-        species.append(specie)
-        matrices.append(site.wp[0].affine_matrix)
-        anchors.append(anchor)
-
-        # to select random representatives (instead of zeroth representative)
-        # orbit_size = len(site.wp)
-        # idx = np.random.randint(orbit_size)
-        # coords.append(site.wp[idx].operate(coord))
-        # matrices.append(site.wp[idx].affine_matrix)
-        
-        site.wp.get_site_symmetry() # initialize the wyckoff position
-        hmwyckoffs.append(cluster_sites[site.wp.site_symm]) # HM notation of wyckoff position
-        labels.append(site.wp.get_label()) # label of wyckoff position (1a, 3a, etc.)
+        # coords.append(coord)
+        # species.append(specie)
+        # matrices.append(site.wp[0].affine_matrix)
+        # anchors.append(anchor)
 
         # old code from DiffCSP (generate all atoms in the orbit)
-        # for syms in site.wp:
-        #     species.append(specie)
-        #     matrices.append(syms.affine_matrix)
-        #     coords.append(syms.operate(coord))
-        #     anchors.append(anchor)
+        for syms in site.wp:
+            species.append(specie)
+            matrices.append(syms.affine_matrix)
+            coords.append(syms.operate(coord))
+            anchors.append(anchor)
+            identifier.append(id)
     
+            site.wp.get_site_symmetry() # initialize the wyckoff position
+            hmwyckoffs.append(cluster_sites[site.wp.site_symm]) # HM notation of wyckoff position
+            labels.append(site.wp.get_label()) # label of wyckoff position (1a, 3a, etc.)
+
     gt_num_coords = len(coords)
-    ##### add dummy origin element
-    # coords.append(np.zeros_like(coords[0])) # position of dummy element
-    # species.append('Md') # symbol of dummy element
-    # matrices.append(np.eye(4)) # identity matrix
-    # hmwyckoffs.append(hmwyckoffs[-1]) # HM notation of dummy element
-    # labels.append(labels[-1]) # label of dummy element
-    # anchors.append(len(matrices) - 1) # anchor of dummy element
     if num_repr:
         # add dummy representative element
         for _ in range(num_repr - gt_num_coords):
@@ -400,7 +389,8 @@ def get_symmetry_info(crystal, tol=0.01, num_repr=10, use_random_repr=False):
     else:
         dummy_origin_indicator = np.array([0] * gt_num_coords).astype(int)
         dummy_representative_indicator = np.array([0] * gt_num_coords).astype(int)
-    return crystal, sym_info, dummy_representative_indicator, dummy_origin_indicator
+    identifier = np.array(identifier)
+    return crystal, sym_info, dummy_representative_indicator, dummy_origin_indicator, identifier
 
 def build_crystal_graph(crystal, graph_method='crystalnn'):
     """
@@ -1405,13 +1395,14 @@ def process_one(row, niggli, primitive, graph_method, prop_list, use_space_group
     lattice_ks = lattice_to_ks(lattice_matrix)
     result_dict = {}
     if use_space_group:
-        crystal, sym_info, dummy_repr_ind, dummy_origin_ind = get_symmetry_info(crystal, tol = tol, num_repr = num_repr, use_random_repr = use_random_repr)
+        crystal, sym_info, dummy_repr_ind, dummy_origin_ind, identifier = get_symmetry_info(crystal, tol = tol, num_repr = num_repr, use_random_repr = use_random_repr)
         result_dict.update(sym_info)
 
         # obtain the HM binary representation for space group and site symmetries
         sg_repr = get_site_symmetry_binary_repr(sym_info['hmnotation'])
         site_repr = [get_site_symmetry_binary_repr(hmnot, label=lbl) for hmnot, lbl in zip(sym_info['hmwyckoffs'], sym_info['labels'])]
         result_dict['sg_binary'] = sg_repr
+        result_dict['identifier'] = identifier
         result_dict['site_symm_binary'] = torch.stack(site_repr)
         result_dict['dummy_repr_ind'] = dummy_repr_ind
         result_dict['dummy_origin_ind'] = dummy_origin_ind

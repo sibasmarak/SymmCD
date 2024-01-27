@@ -281,7 +281,7 @@ class CSPDiffusion(BaseModule):
         loss_lattice = F.mse_loss(pred_lattice, ks_mask * rand_ks) if self.use_ks else F.mse_loss(pred_lattice, rand_l)
 
         # loss_coord = F.mse_loss(pred_x * (1 - dummy_repr_ind), tar_x * (1 - dummy_repr_ind))
-        loss_coord = F.mse_loss(pred_x, tar_x)
+        loss_coord = F.mse_loss(batch.x_loss_coeff * pred_x, batch.x_loss_coeff * tar_x)
         
         loss_type = F.mse_loss(pred_t, rand_t)
         
