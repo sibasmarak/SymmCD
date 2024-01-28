@@ -15,5 +15,5 @@ use_site_symm: false
 
 defaults:
   - decoder: cspnet
-  - beta_scheduler: cosine
+  - beta_scheduler: adaptive_cosines
   - sigma_scheduler: wrapped
