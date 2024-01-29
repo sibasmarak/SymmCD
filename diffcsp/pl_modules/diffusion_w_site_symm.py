@@ -225,12 +225,12 @@ class CSPDiffusion(BaseModule):
         c0 = torch.sqrt(alphas_cumprod)
         c1 = torch.sqrt(1. - alphas_cumprod)
         if c0.ndim == 2:
-            c0_lattice = c0[:, self.scheduler.LATTICE]
-            c1_lattice = c1[:, self.scheduler.LATTICE]
-            c0_atom = c0[:, self.scheduler.ATOM]
-            c1_atom = c1[:, self.scheduler.ATOM]
-            c0_site_symm = c0[:, self.scheduler.SITE_SYMM]
-            c1_site_symm = c1[:, self.scheduler.SITE_SYMM]
+            c0_lattice = c0[:, self.beta_scheduler.LATTICE]
+            c1_lattice = c1[:, self.beta_scheduler.LATTICE]
+            c0_atom = c0[:, self.beta_scheduler.ATOM]
+            c1_atom = c1[:, self.beta_scheduler.ATOM]
+            c0_site_symm = c0[:, self.beta_scheduler.SITE_SYMM]
+            c1_site_symm = c1[:, self.beta_scheduler.SITE_SYMM]
         else:
             c0_lattice = c0_atom = c0_site_symm = c0
             c1_lattice = c1_atom = c1_site_symm = c1
@@ -365,12 +365,12 @@ class CSPDiffusion(BaseModule):
             c0 = 1.0 / torch.sqrt(alphas)
             c1 = (1 - alphas) / torch.sqrt(1 - alphas_cumprod)
             if c0.ndim == 2:
-                c0_lattice = c0[:, self.scheduler.LATTICE]
-                c1_lattice = c1[:, self.scheduler.LATTICE]
-                c0_atom = c0[:, self.scheduler.ATOM]
-                c1_atom = c1[:, self.scheduler.ATOM]
-                c0_site_symm = c0[:, self.scheduler.SITE_SYMM]
-                c1_site_symm = c1[:, self.scheduler.SITE_SYMM]
+                c0_lattice = c0[:, self.beta_scheduler.LATTICE]
+                c1_lattice = c1[:, self.beta_scheduler.LATTICE]
+                c0_atom = c0[:, self.beta_scheduler.ATOM]
+                c1_atom = c1[:, self.beta_scheduler.ATOM]
+                c0_site_symm = c0[:, self.beta_scheduler.SITE_SYMM]
+                c1_site_symm = c1[:, self.beta_scheduler.SITE_SYMM]
             else:
                 c0_lattice = c0_atom = c0_site_symm = c0
                 c1_lattice = c1_atom = c1_site_symm = c1

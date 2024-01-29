@@ -1,9 +1,9 @@
 program: diffcsp.run
 method: grid
-name: test different hyperparams (mp20 ab-intio, dummy repr with ip)
+name: test different hyperparams (mp20 ab-intio, actual repr only)
 parameters:
     expname:
-      value: mp_20_sg_71
+      value: mp_20
     data:
       value: mp_20
     data.number_representatives:
@@ -19,19 +19,25 @@ parameters:
     model:
       value: diffusion_w_site_symm
     model.cost_symm:
-      values: [20., 200.]
+      value: 20
     model.use_ks:
       value: False
     model.ip:
       value: True
+    model.beta_scheduler.nu_site_symm:
+      values: [1, 2, 4]
+    model.beta_scheduler.nu_lattice:
+      value: 1
+    model.beta_scheduler.nu_atom:
+      value: 1
     model.use_gt_frac_coords:
-      values: [True, False]
+      value: True
     model.decoder.num_freqs:
       value: 128
     model.decoder.num_layers:
-      value: 6
+      values: [6, 8, 10]
     model.decoder.hidden_dim:
-      value: 512
+      values: [512, 1024]
     model.use_site_symm:
       value: True
 command:
