@@ -16,10 +16,10 @@ conda activate diffcsp
 HYDRA_FULL_ERROR=1 python diffcsp/run.py expname=mp_20_actual_repr data=mp_20 data.number_representatives=0 data.train_max_epochs=100000 \
 logging.wandb.mode=offline logging.wandb.project=diffcsp_symmetry logging.val_check_interval=1 \
 model=diffusion_w_site_symm model.use_ks=True model.ip=False model.use_gt_frac_coords=True model.use_site_symm=True \
-model.decoder.hidden_dim=1024 model.decoder.num_layers=10 model.beta_scheduler.nu_site_symm=2
+model.decoder.hidden_dim=1024 model.decoder.num_layers=10 model.beta_scheduler.nu_site_symm=2.5 model.beta_scheduler.nu_lattice=1 model.beta_scheduler.nu_atom=1.5
 
 # generating eval_gen.pt (for Table 4 in DiffCSP paper, ab-initio generation) 
-# python scripts/generation.py --model_path /home/mila/s/siba-smarak.panigrahi/scratch/DiffCSP/hydra/singlerun/2024-01-27/mp_20_actual_repr/super-hill-214/ --dataset mp --label final_num_samples_20
+# python scripts/generation.py --model_path /home/mila/s/siba-smarak.panigrahi/scratch/DiffCSP/hydra/singlerun/2024-01-27/mp_20_actual_repr/kind-snow-213/ --dataset mp --label final_num_samples_20 --batch_size 5
 # python scripts/compute_metrics.py --root_path /home/mila/s/siba-smarak.panigrahi/scratch/DiffCSP/hydra/singlerun/2024-01-27/mp_20_actual_repr/super-hill-214/ --tasks gen --gt_file data/mp_20/test.csv --label final_num_samples_20
 
 # generating eval_diff.pt (for Table 1 in DiffCSP paper, crystal structure prediction (csp) task)

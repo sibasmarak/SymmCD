@@ -1,6 +1,6 @@
 program: diffcsp.run
 method: grid
-name: test different hyperparams (mp20 ab-intio, actual repr only)
+name: test different hyperparams (mp20 ab-intio, actual, randomly selected repr only)
 parameters:
     expname:
       value: mp_20
@@ -9,12 +9,14 @@ parameters:
     data.number_representatives:
       value: 20
     data.train_max_epochs:
-      value: 100000
+      value: 2000
     logging.wandb.mode:
       value: online
     logging.wandb.project:
       value: diffcsp_symmetry
     logging.val_check_interval:
+      value: 1
+    train.pl_trainer.devices:
       value: 1
     model:
       value: diffusion_w_site_symm
@@ -25,21 +27,25 @@ parameters:
     model.ip:
       value: True
     model.beta_scheduler.nu_site_symm:
-      values: [1, 2, 4]
+      values: [0.5, 1, 1.5, 2.5]
     model.beta_scheduler.nu_lattice:
-      value: 1
+      values: [0.5, 1, 1.5, 2.5]
     model.beta_scheduler.nu_atom:
-      value: 1
+      values: [0.5, 1, 1.5, 2.5]
+    model.sigma_scheduler.sigma_end:
+      values: [0.5, 1.0]
     model.use_gt_frac_coords:
       value: True
     model.decoder.num_freqs:
       value: 128
     model.decoder.num_layers:
-      values: [6, 8, 10]
+      values: [8, 10]
     model.decoder.hidden_dim:
       values: [512, 1024]
     model.use_site_symm:
       value: True
+    optim.lr:
+      values: [1e-3, 1e-4]
 command:
     - ${env}
     - python3

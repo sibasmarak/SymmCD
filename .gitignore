@@ -166,3 +166,6 @@ cdvae/
 perov_sweep_output/
 mp_20_sweep_output/
 wandb/
+
+dist.out
+alpha_cumprod.png
