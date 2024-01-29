@@ -4,13 +4,13 @@ import torch.nn as nn
 import numpy as np
 import math
 
-def cosine_beta_schedule(timesteps, s=0.008):
+def cosine_beta_schedule(timesteps, s=0.008, nu=1):
     """
     cosine schedule as proposed in https://arxiv.org/abs/2102.09672
     """
     steps = timesteps + 1
     x = torch.linspace(0, timesteps, steps)
-    alphas_cumprod = torch.cos(((x / timesteps) + s) / (1 + s) * math.pi * 0.5) ** 2
+    alphas_cumprod = torch.cos(((x / timesteps) + s)**nu / (1 + s) * math.pi * 0.5) ** 2
     alphas_cumprod = alphas_cumprod / alphas_cumprod[0]
     betas = 1 - (alphas_cumprod[1:] / alphas_cumprod[:-1])
     return torch.clip(betas, 0.0001, 0.9999)
@@ -55,12 +55,13 @@ class BetaScheduler(nn.Module):
         timesteps,
         scheduler_mode,
         beta_start = 0.0001,
-        beta_end = 0.02
+        beta_end = 0.02,
+        nu=1
     ):
         super(BetaScheduler, self).__init__()
         self.timesteps = timesteps
         if scheduler_mode == 'cosine':
-            betas = cosine_beta_schedule(timesteps)
+            betas = cosine_beta_schedule(timesteps, nu=nu)
         elif scheduler_mode == 'linear':
             betas = linear_beta_schedule(timesteps, beta_start, beta_end)
         elif scheduler_mode == 'quadratic':
@@ -87,6 +88,41 @@ class BetaScheduler(nn.Module):
     def uniform_sample_t(self, batch_size, device):
         ts = np.random.choice(np.arange(1, self.timesteps+1), batch_size)
         return torch.from_numpy(ts).to(device)
+
+
+
+class AdaptiveCosineSchedulers(nn.Module):
+
+    def __init__(
+        self,
+        timesteps,
+        beta_start = 0.0001,
+        beta_end = 0.02,
+        nu_lattice = 1.,
+        nu_atom = 1.,
+        nu_site_symm = 1.
+    ):
+        super(AdaptiveCosineSchedulers, self).__init__()
+        self.LATTICE = 0
+        self.ATOM = 1
+        self.SITE_SYMM = 2
+        self.timesteps = timesteps
+        keys = ['lattice', 'atom', 'site_symm']
+        self.scheduler_dict = {
+            'lattice': BetaScheduler(timesteps, 'cosine', beta_start, beta_end, nu=nu_lattice),
+            'atom': BetaScheduler(timesteps, 'cosine', beta_start, beta_end, nu=nu_atom),
+            'site_symm': BetaScheduler(timesteps, 'cosine', beta_start, beta_end, nu=nu_site_symm)
+        }
+
+        self.register_buffer('betas', torch.stack([self.scheduler_dict[key].betas for key in keys], dim=1))
+        self.register_buffer('alphas', torch.stack([self.scheduler_dict[key].alphas for key in keys], dim=1))
+        self.register_buffer('alphas_cumprod', torch.stack([self.scheduler_dict[key].alphas_cumprod for key in keys], dim=1))
+        self.register_buffer('sigmas', torch.stack([self.scheduler_dict[key].sigmas for key in keys], dim=1))
+
+    def uniform_sample_t(self, batch_size, device):
+        ts = np.random.choice(np.arange(1, self.timesteps+1), batch_size)
+        return torch.from_numpy(ts).to(device)
+
 
 class SigmaScheduler(nn.Module):
 

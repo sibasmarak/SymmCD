@@ -220,10 +220,20 @@ class CSPDiffusion(BaseModule):
         time_emb = self.time_embedding(times) + self.spacegroup_embedding(batch.sg_condition.reshape(-1, 73))
 
         alphas_cumprod = self.beta_scheduler.alphas_cumprod[times]
-        beta = self.beta_scheduler.betas[times]
+
 
         c0 = torch.sqrt(alphas_cumprod)
         c1 = torch.sqrt(1. - alphas_cumprod)
+        if c0.ndim == 2:
+            c0_lattice = c0[:, self.scheduler.LATTICE]
+            c1_lattice = c1[:, self.scheduler.LATTICE]
+            c0_atom = c0[:, self.scheduler.ATOM]
+            c1_atom = c1[:, self.scheduler.ATOM]
+            c0_site_symm = c0[:, self.scheduler.SITE_SYMM]
+            c1_site_symm = c1[:, self.scheduler.SITE_SYMM]
+        else:
+            c0_lattice = c0_atom = c0_site_symm = c0
+            c1_lattice = c1_atom = c1_site_symm = c1
 
         sigmas = self.sigma_scheduler.sigmas[times]
         sigmas_norm = self.sigma_scheduler.sigmas_norm[times]
@@ -242,11 +252,11 @@ class CSPDiffusion(BaseModule):
         rand_l = torch.randn_like(lattices)
 
         if self.use_ks:
-            input_ks = c0[:, None] * ks + c1[:, None] * rand_ks
+            input_ks = c0_lattice[:, None] * ks + c1_lattice[:, None] * rand_ks
             input_ks = mask_ks(input_ks, ks_mask, ks_add)
             input_lattice = lattice_ks_to_matrix_torch(input_ks)
         else:
-            input_lattice = c0[:, None, None] * lattices + c1[:, None, None] * rand_l
+            input_lattice = c0_lattice[:, None, None] * lattices + c1_lattice[:, None, None] * rand_l
             
             
         sigmas_per_atom = sigmas.repeat_interleave(batch.num_atoms)[:, None]
@@ -259,8 +269,8 @@ class CSPDiffusion(BaseModule):
         rand_t = torch.randn_like(gt_atom_types_onehot)
         rand_symm = torch.randn_like(gt_site_symm_binary)
 
-        atom_type_probs = (c0.repeat_interleave(batch.num_atoms)[:, None] * gt_atom_types_onehot + c1.repeat_interleave(batch.num_atoms)[:, None] * rand_t)
-        site_symm_probs = (c0.repeat_interleave(batch.num_atoms)[:, None] * gt_site_symm_binary + c1.repeat_interleave(batch.num_atoms)[:, None] * rand_symm)
+        atom_type_probs = (c0_atom.repeat_interleave(batch.num_atoms)[:, None] * gt_atom_types_onehot + c1_atom.repeat_interleave(batch.num_atoms)[:, None] * rand_t)
+        site_symm_probs = (c0_site_symm.repeat_interleave(batch.num_atoms)[:, None] * gt_site_symm_binary + c1_site_symm.repeat_interleave(batch.num_atoms)[:, None] * rand_symm)
 
         if self.keep_coords:
             input_frac_coords = frac_coords
@@ -354,6 +364,16 @@ class CSPDiffusion(BaseModule):
 
             c0 = 1.0 / torch.sqrt(alphas)
             c1 = (1 - alphas) / torch.sqrt(1 - alphas_cumprod)
+            if c0.ndim == 2:
+                c0_lattice = c0[:, self.scheduler.LATTICE]
+                c1_lattice = c1[:, self.scheduler.LATTICE]
+                c0_atom = c0[:, self.scheduler.ATOM]
+                c1_atom = c1[:, self.scheduler.ATOM]
+                c0_site_symm = c0[:, self.scheduler.SITE_SYMM]
+                c1_site_symm = c1[:, self.scheduler.SITE_SYMM]
+            else:
+                c0_lattice = c0_atom = c0_site_symm = c0
+                c1_lattice = c1_atom = c1_site_symm = c1
 
             x_t = traj[t]['frac_coords']
             l_t = traj[t]['lattices']
@@ -422,16 +442,16 @@ class CSPDiffusion(BaseModule):
             x_t_minus_1 = x_t_minus_05 - step_size * pred_x + std_x * rand_x if not self.keep_coords else x_t
 
             if self.use_ks:
-                k_t_minus_1 = c0 * (k_t_minus_05 - c1 * pred_l) + sigmas * rand_k if not self.keep_lattice else k_t
+                k_t_minus_1 = c0_lattice * (k_t_minus_05 - c1_lattice * pred_l) + sigmas * rand_k if not self.keep_lattice else k_t
                 k_t_minus_1 = mask_ks(k_t_minus_1, ks_mask, ks_add)
                 l_t_minus_1 = lattice_ks_to_matrix_torch(k_t_minus_1) if not self.keep_lattice else l_t
             else:
-                l_t_minus_1 = c0 * (l_t_minus_05 - c1 * pred_l) + sigmas * rand_l if not self.keep_lattice else l_t
+                l_t_minus_1 = c0_lattice * (l_t_minus_05 - c1_lattice * pred_l) + sigmas * rand_l if not self.keep_lattice else l_t
                 k_t_minus_1 = k_t
 
-            t_t_minus_1 = c0 * (t_t_minus_05 - c1 * pred_t) + sigmas * rand_t
+            t_t_minus_1 = c0_atom * (t_t_minus_05 - c1_atom * pred_t) + sigmas * rand_t
 
-            symm_t_minus_1 = c0 * (symm_t_minus_05 - c1 * pred_symm) + sigmas * rand_symm
+            symm_t_minus_1 = c0_site_symm * (symm_t_minus_05 - c1_site_symm * pred_symm) + sigmas * rand_symm
 
             traj[t - 1] = {
                 'num_atoms' : batch.num_atoms,
