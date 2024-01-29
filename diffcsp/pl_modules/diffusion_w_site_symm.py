@@ -89,8 +89,8 @@ def modify_frac_coords_one(frac_coords, site_symm, atom_types, spacegroup):
         closes = []   
         for wp, binary in wp_to_binary.items():
             if np.sum(np.equal(binary, sym)) == sym.shape[-1]:
-                for orbit_index in range(1):
-                    close = search_cloest_wp(Group(spacegroup), wp, wp.ops[orbit_index], frac_coord)
+                for orbit_index in range(len(wp.ops)):
+                    close = search_cloest_wp(Group(spacegroup), wp, wp.ops[orbit_index], frac_coord)%1.
                     closes.append((close, wp, orbit_index, np.linalg.norm(np.minimum((close - frac_coord)%1., (frac_coord - close)%1.))))
         try:
             # pick the nearest wp to project
