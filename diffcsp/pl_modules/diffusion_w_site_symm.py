@@ -832,8 +832,8 @@ class CSPDiffusion(BaseModule):
                 # get training dataset
                 test_set = SampleDataset(
                     self.hparams.data.root_path.split('/')[-1], 
-                    5 * 2, self.hparams.data.datamodule.datasets.train.save_path)
-                test_loader = DataLoader(test_set, batch_size = 5)
+                    50 * 10, self.hparams.data.datamodule.datasets.train.save_path)
+                test_loader = DataLoader(test_set, batch_size = 50)
                 
                 frac_coords = []
                 num_atoms = []
