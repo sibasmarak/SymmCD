@@ -310,7 +310,7 @@ def get_site_symmetry_binary_repr(notation:str, label:str = None):
 
 
 def get_symmetry_info(crystal, tol=0.01, num_repr=10, use_random_repr=False):
-    cluster_sites = json.load(open('/home/mila/s/siba-smarak.panigrahi/DiffCSP/cluster_sites.json', 'r'))
+    cluster_sites = json.load(open('/workspace/mila-top/crystal_diff/intel-mat-diffusion/cluster_sites.json', 'r'))
     spga = SpacegroupAnalyzer(crystal, symprec=tol)
     # NOTE: this converts [x,0,0.5] -> [0, 0.5, x] (or the canonical form)
     # basically diffusion model learns the distribution of this refined structure and not the original structure
