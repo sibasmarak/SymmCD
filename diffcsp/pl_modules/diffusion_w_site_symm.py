@@ -579,7 +579,7 @@ class CSPDiffusion(BaseModule):
         loss_lattice = F.mse_loss(pred_lattice, ks_mask * rand_ks) if self.use_ks else F.mse_loss(pred_lattice, rand_l)
 
         # loss_coord = F.mse_loss(pred_x * (1 - dummy_repr_ind), tar_x * (1 - dummy_repr_ind))
-        loss_coord = torch.mean(batch.x_loss_coeff * F.mse_loss(pred_x, tar_x, reduction='none'))
+        loss_coord = torch.mean(torch.sqrt(batch.x_loss_coeff) * F.mse_loss(pred_x, tar_x, reduction='none'))
         
         loss_type = F.mse_loss(pred_t, rand_t)
         

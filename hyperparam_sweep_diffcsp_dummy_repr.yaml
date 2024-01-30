@@ -23,9 +23,9 @@ parameters:
     model.cost_symm:
       value: 20
     model.use_ks:
-      value: False
-    model.ip:
       value: True
+    model.ip:
+      value: False
     model.beta_scheduler.nu_site_symm:
       values: [0.5, 1, 1.5, 2.5]
     model.beta_scheduler.nu_lattice:
