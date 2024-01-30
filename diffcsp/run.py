@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import List
 import sys
-sys.path.append('.')
+sys.path.append('/workspace/mila-top/crystal_diff/intel-mat-diffusion/')
 import hydra
 import numpy as np
 import torch, os
@@ -16,6 +16,7 @@ from pytorch_lightning.callbacks import (
     ModelCheckpoint,
 )
 from pytorch_lightning.loggers import WandbLogger
+from pytorch_lightning.strategies import DDPStrategy
 
 from diffcsp.common.utils import log_hyperparameters, PROJECT_ROOT
 
@@ -89,12 +90,6 @@ def run(cfg: DictConfig) -> None:
         # Switch wandb mode to offline to prevent online logging
         cfg.logging.wandb.mode = "offline"
 
-    # Instantiate datamodule
-    hydra.utils.log.info(f"Instantiating <{cfg.data.datamodule._target_}>")
-    datamodule: pl.LightningDataModule = hydra.utils.instantiate(
-        cfg.data.datamodule, _recursive_=False
-    )
-
     # Instantiate model
     hydra.utils.log.info(f"Instantiating <{cfg.model._target_}>")
     model: pl.LightningModule = hydra.utils.instantiate(
@@ -104,7 +99,8 @@ def run(cfg: DictConfig) -> None:
         logging=cfg.logging,
         _recursive_=False,
     )
-            
+
+
     # Logger instantiation/configuration
     wandb_logger = None
     if "wandb" in cfg.logging:
@@ -121,9 +117,19 @@ def run(cfg: DictConfig) -> None:
             log=cfg.logging.wandb_watch.log,
             log_freq=cfg.logging.wandb_watch.log_freq,
         )
+
+    # Instantiate datamodule
+    hydra.utils.log.info(f"Instantiating <{cfg.data.datamodule._target_}>")
+    datamodule: pl.LightningDataModule = hydra.utils.instantiate(
+        cfg.data.datamodule, _recursive_=False
+    )
+
+    
+            
+    
         
     # Hydra run directory (else part will be true if wandb is set offline)
-    hydra_dir = Path(HydraConfig.get().run.dir) / wandb_logger.experiment.name if wandb_logger is not None else Path(HydraConfig.get().run.dir)
+    hydra_dir = Path(HydraConfig.get().run.dir) / str(wandb_logger.experiment.name) if wandb_logger is not None else Path(HydraConfig.get().run.dir)
     if not os.path.exists(hydra_dir):
         os.makedirs(hydra_dir)
     hydra.utils.log.info(f"Hydra run directory: {hydra_dir}")
@@ -151,6 +157,7 @@ def run(cfg: DictConfig) -> None:
     else:
         ckpt = None
           
+
     hydra.utils.log.info("Instantiating the Trainer")
     trainer = pl.Trainer(
         default_root_dir=hydra_dir,
@@ -158,6 +165,7 @@ def run(cfg: DictConfig) -> None:
         callbacks=callbacks,
         deterministic=cfg.train.deterministic,
         check_val_every_n_epoch=cfg.logging.val_check_interval,
+        strategy=DDPStrategy(find_unused_parameters=True),
         # progress_bar_refresh_rate=cfg.logging.progress_bar_refresh_rate, #NOTE: No longer viable in new PyTorch Lightning version
         # resume_from_checkpoint=ckpt,#NOTE: No longer viable in new PyTorch Lightning version
         **cfg.train.pl_trainer,
