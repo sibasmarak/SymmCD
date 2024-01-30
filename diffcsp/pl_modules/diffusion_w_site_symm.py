@@ -52,7 +52,8 @@ from scripts.eval_utils import (
     load_config, load_data, get_crystals_list, prop_model_eval, compute_cov)
 
 MAX_ATOMIC_NUM=101
-CLUSTERED_SITES = json.load(open('/home/mila/s/siba-smarak.panigrahi/DiffCSP/cluster_sites.json', 'r'))
+CLUSTERED_SITES = json.load(open('/workspace/mila-top/crystal_diff/intel-mat-diffusion/cluster_sites.json', 'r'))
+# CLUSTERED_SITES = json.load(open('/home/mila/s/siba-smarak.panigrahi/DiffCSP/cluster_sites.json', 'r'))
 COV_Cutoffs = {
     'mp20': {'struc': 0.4, 'comp': 10.},
     'carbon': {'struc': 0.2, 'comp': 4.},

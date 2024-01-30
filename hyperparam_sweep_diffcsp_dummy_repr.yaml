@@ -17,7 +17,7 @@ parameters:
     logging.val_check_interval:
       value: 1
     train.pl_trainer.devices:
-      value: 1
+      value: 2
     model:
       value: diffusion_w_site_symm
     model.cost_symm:
