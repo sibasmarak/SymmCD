@@ -1,13 +1,25 @@
 import math, copy
-import json
+import json, os
 import numpy as np
+import pandas as pd
+from p_tqdm import p_map
+import itertools
+
+from pymatgen.core.structure import Structure
+from pymatgen.core.composition import Composition
+from pymatgen.core.lattice import Lattice
+from pymatgen.analysis.structure_matcher import StructureMatcher
+from matminer.featurizers.site.fingerprint import CrystalNNFingerprint
+from matminer.featurizers.composition.composite import ElementProperty
+CrystalNNFP = CrystalNNFingerprint.from_preset("ops")
+CompFP = ElementProperty.from_preset('magpie')
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
 
-from collections import defaultdict
+from collections import defaultdict, Counter
 from typing import Any, Dict, List
 
 import hydra
@@ -19,19 +31,299 @@ from torch_geometric.utils import to_dense_adj, dense_to_sparse
 from tqdm import tqdm
 
 from pyxtal.symmetry import search_cloest_wp, Group
+import smact
+from smact.screening import pauling_test
 
 from diffcsp.common.utils import PROJECT_ROOT
 from diffcsp.common.data_utils import (
     EPSILON, cart_to_frac_coords, mard, lengths_angles_to_volume, lattice_params_to_matrix_torch,
     frac_to_cart_coords, min_distance_sqr_pbc, lattice_ks_to_matrix_torch, get_site_symmetry_binary_repr,
-    sg_to_ks_mask, mask_ks, N_SPACEGROUPS)
+    sg_to_ks_mask, mask_ks, N_SPACEGROUPS, StandardScaler, chemical_symbols)
 
 from diffcsp.pl_modules.diff_utils import d_log_p_wrapped_normal
 from diffcsp.pl_modules.model import build_mlp
 
+from torch_geometric.data import Data, Batch, DataLoader
+from torch.utils.data import Dataset
+from pathlib import Path
+from scipy.stats import wasserstein_distance
+from scripts.eval_utils import (
+    CompScaler, get_fp_pdist,
+    load_config, load_data, get_crystals_list, prop_model_eval, compute_cov)
+
 MAX_ATOMIC_NUM=101
 CLUSTERED_SITES = json.load(open('/workspace/mila-top/crystal_diff/intel-mat-diffusion/cluster_sites.json', 'r'))
+# CLUSTERED_SITES = json.load(open('/home/mila/s/siba-smarak.panigrahi/DiffCSP/cluster_sites.json', 'r'))
+COV_Cutoffs = {
+    'mp20': {'struc': 0.4, 'comp': 10.},
+    'carbon': {'struc': 0.2, 'comp': 4.},
+    'perovskite': {'struc': 0.2, 'comp': 4},
+}
 
+class SampleDataset(Dataset):
+
+    def __init__(self, dataset, total_num, test_ori_path):
+        super().__init__()
+        self.total_num = total_num
+        self.is_carbon = dataset == 'carbon'
+
+        self.additional_test = torch.load(test_ori_path)
+        self.additional_test_len = len(self.additional_test)
+        
+        sg_counter = defaultdict(lambda : 0)
+        self.sg_num_atoms = defaultdict(lambda : defaultdict(lambda : 0))
+        sg_number_binary_mapper = {}
+        for i in range(self.additional_test_len):
+            sg_counter[self.additional_test[i]['spacegroup']] += 1
+            sg_number_binary_mapper[self.additional_test[i]['spacegroup']] = self.additional_test[i]['sg_binary']
+            num_atoms = self.additional_test[i]['graph_arrays'][-1]
+            self.sg_num_atoms[self.additional_test[i]['spacegroup']][num_atoms] += 1
+
+        # spacegroup distribution
+        self.sg_dist = []
+        for i in range(1, 231): self.sg_dist.append(sg_counter[i])
+        self.sg_dist = np.array(self.sg_dist)
+        self.sg_dist = self.sg_dist / self.additional_test_len
+        self.sg_number_binary_mapper = sg_number_binary_mapper
+        
+        # for each space group, atom number distribution
+        for sg in self.sg_num_atoms:
+            total = sum(self.sg_num_atoms[sg].values())
+            for num_atoms in self.sg_num_atoms[sg]: self.sg_num_atoms[sg][num_atoms] /= total
+
+    def __len__(self) -> int:
+        return self.total_num
+
+    def __getitem__(self, index):
+        spacegroup = np.random.choice(230, p = self.sg_dist) + 1
+        num_atom = np.random.choice(list(self.sg_num_atoms[spacegroup].keys()), p = list(self.sg_num_atoms[spacegroup].values()))
+        
+        data = Data(
+            num_atoms=torch.LongTensor([num_atom]),
+            num_nodes=num_atom,
+            spacegroup=spacegroup, # number
+            sg_condition=self.sg_number_binary_mapper[spacegroup], # float tensor
+        )
+        if self.is_carbon:
+            data.atom_types = torch.LongTensor([6] * num_atom)
+        return data
+
+class Crystal(object):
+
+    def __init__(self, crys_array_dict, filter=False):
+        self.frac_coords = crys_array_dict['frac_coords']
+        self.atom_types = crys_array_dict['atom_types']
+        self.lengths = crys_array_dict['lengths']
+        self.angles = crys_array_dict['angles']
+        self.dict = crys_array_dict
+        if len(self.atom_types.shape) > 1:
+            # this implies the distribution over atom_types is passed instead of the atom_types
+            # for perov that would mean a numpy array of (5, 100) instead of (5,)
+            self.dict['atom_types'] = (np.argmax(self.atom_types, axis=-1) + 1)
+            self.atom_types = (np.argmax(self.atom_types, axis=-1) + 1)
+        
+        self.get_structure()
+        self.get_composition()
+        self.get_validity()
+        self.get_fingerprints()
+
+    def get_structure(self):
+        if min(self.lengths.tolist()) < 0:
+            self.constructed = False
+            self.invalid_reason = 'non_positive_lattice'
+        if np.isnan(self.lengths).any() or np.isnan(self.angles).any() or  np.isnan(self.frac_coords).any():
+            self.constructed = False
+            self.invalid_reason = 'nan_value'            
+        else:
+            try:
+                self.structure = Structure(
+                    lattice=Lattice.from_parameters(
+                        *(self.lengths.tolist() + self.angles.tolist())),
+                    species=self.atom_types, coords=self.frac_coords, coords_are_cartesian=False)
+                self.constructed = True
+            except Exception:
+                self.constructed = False
+                self.invalid_reason = 'construction_raises_exception'
+            if self.structure.volume < 0.1:
+                self.constructed = False
+                self.invalid_reason = 'unrealistically_small_lattice'
+
+    def get_composition(self):
+        elem_counter = Counter(self.atom_types)
+        composition = [(elem, elem_counter[elem])
+                       for elem in sorted(elem_counter.keys())]
+        elems, counts = list(zip(*composition))
+        counts = np.array(counts)
+        counts = counts / np.gcd.reduce(counts)
+        self.elems = elems
+        self.comps = tuple(counts.astype('int').tolist())
+
+    def get_validity(self):
+        self.comp_valid = smact_validity(self.elems, self.comps)
+        if self.constructed:
+            self.struct_valid = structure_validity(self.structure)
+        else:
+            self.struct_valid = False
+        self.valid = self.comp_valid and self.struct_valid
+
+    def get_fingerprints(self):
+        elem_counter = Counter(self.atom_types)
+        comp = Composition(elem_counter)
+        self.comp_fp = CompFP.featurize(comp)
+        try:
+            site_fps = [CrystalNNFP.featurize(
+                self.structure, i) for i in range(len(self.structure))]
+        except Exception:
+            # counts crystal as invalid if fingerprint cannot be constructed.
+            self.valid = False
+            self.comp_fp = None
+            self.struct_fp = None
+            return
+        self.struct_fp = np.array(site_fps).mean(axis=0)
+    
+class GenEval(object):
+
+    def __init__(self, pred_crys, gt_crys, n_samples=1000, eval_model_name=None):
+        self.crys = pred_crys
+        self.gt_crys = gt_crys
+        self.n_samples = n_samples
+        self.eval_model_name = eval_model_name
+
+        valid_crys = [c for c in pred_crys if c.valid]
+        if len(valid_crys) >= n_samples:
+            sampled_indices = np.random.choice(
+                len(valid_crys), n_samples, replace=False)
+            self.valid_samples = [valid_crys[i] for i in sampled_indices]
+        else:
+            raise Exception(
+                f'not enough valid crystals in the predicted set: {len(valid_crys)}/{n_samples}')
+
+    def get_validity(self):
+        comp_valid = np.array([c.comp_valid for c in self.crys]).mean()
+        struct_valid = np.array([c.struct_valid for c in self.crys]).mean()
+        valid = np.array([c.valid for c in self.crys]).mean()
+        return {'comp_valid': comp_valid,
+                'struct_valid': struct_valid,
+                'valid': valid}
+
+    def get_density_wdist(self):
+        pred_densities = [c.structure.density for c in self.valid_samples]
+        gt_densities = [c.structure.density for c in self.gt_crys]
+        wdist_density = wasserstein_distance(pred_densities, gt_densities)
+        return {'wdist_density': wdist_density}
+
+    def get_num_elem_wdist(self):
+        pred_nelems = [len(set(c.structure.species))
+                       for c in self.valid_samples]
+        gt_nelems = [len(set(c.structure.species)) for c in self.gt_crys]
+        wdist_num_elems = wasserstein_distance(pred_nelems, gt_nelems)
+        return {'wdist_num_elems': wdist_num_elems}
+
+    def get_prop_wdist(self):
+        if self.eval_model_name is not None:
+            pred_props = prop_model_eval(self.eval_model_name, [
+                                         c.dict for c in self.valid_samples])
+            gt_props = prop_model_eval(self.eval_model_name, [
+                                       c.dict for c in self.gt_crys])
+            wdist_prop = wasserstein_distance(pred_props, gt_props)
+            return {'wdist_prop': wdist_prop}
+        else:
+            return {'wdist_prop': None}
+
+    def get_coverage(self):
+        cutoff_dict = COV_Cutoffs[self.eval_model_name]
+        (cov_metrics_dict, combined_dist_dict) = compute_cov(
+            self.crys, self.gt_crys,
+            struc_cutoff=cutoff_dict['struc'],
+            comp_cutoff=cutoff_dict['comp'])
+        return cov_metrics_dict
+
+    def get_metrics(self):
+        metrics = {}
+        metrics.update(self.get_validity())
+        metrics.update(self.get_density_wdist())
+        metrics.update(self.get_prop_wdist())
+        metrics.update(self.get_num_elem_wdist())
+        metrics.update(self.get_coverage())
+        return metrics
+    
+def lattices_to_params_shape(lattices):
+
+    lengths = torch.sqrt(torch.sum(lattices ** 2, dim=-1))
+    angles = torch.zeros_like(lengths)
+    for i in range(3):
+        j = (i + 1) % 3
+        k = (i + 2) % 3
+        angles[...,i] = torch.clamp(torch.sum(lattices[...,j,:] * lattices[...,k,:], dim = -1) /
+                            (lengths[...,j] * lengths[...,k]), -1., 1.)
+    angles = torch.arccos(angles) * 180.0 / np.pi
+
+    return lengths, angles
+
+def get_gt_crys_ori(cif):
+    structure = Structure.from_str(cif,fmt='cif')
+    lattice = structure.lattice
+    crys_array_dict = {
+        'frac_coords':structure.frac_coords,
+        'atom_types':np.array([_.Z for _ in structure.species]),
+        'lengths': np.array(lattice.abc),
+        'angles': np.array(lattice.angles)
+    }
+    return Crystal(crys_array_dict) 
+
+def smact_validity(comp, count,
+                   use_pauling_test=True,
+                   include_alloys=True):
+    elem_symbols = tuple([chemical_symbols[elem] for elem in comp])
+    space = smact.element_dictionary(elem_symbols)
+    smact_elems = [e[1] for e in space.items()]
+    electronegs = [e.pauling_eneg for e in smact_elems]
+    ox_combos = [e.oxidation_states for e in smact_elems]
+    if len(set(elem_symbols)) == 1:
+        return True
+    if include_alloys:
+        is_metal_list = [elem_s in smact.metals for elem_s in elem_symbols]
+        if all(is_metal_list):
+            return True
+
+    threshold = np.max(count)
+    compositions = []
+    # if len(list(itertools.product(*ox_combos))) > 1e5:
+    #     return False
+    oxn = 1
+    for oxc in ox_combos:
+        oxn *= len(oxc)
+    if oxn > 1e7:
+        return False
+    for ox_states in itertools.product(*ox_combos):
+        stoichs = [(c,) for c in count]
+        # Test for charge balance
+        cn_e, cn_r = smact.neutral_ratios(
+            ox_states, stoichs=stoichs, threshold=threshold)
+        # Electronegativity test
+        if cn_e:
+            if use_pauling_test:
+                try:
+                    electroneg_OK = pauling_test(ox_states, electronegs)
+                except TypeError:
+                    # if no electronegativity data, assume it is okay
+                    electroneg_OK = True
+            else:
+                electroneg_OK = True
+            if electroneg_OK:
+                return True
+    return False
+
+def structure_validity(crystal, cutoff=0.5):
+    dist_mat = crystal.distance_matrix
+    # Pad diagonal with a large number
+    dist_mat = dist_mat + np.diag(
+        np.ones(dist_mat.shape[0]) * (cutoff + 10.))
+    if dist_mat.min() < cutoff or crystal.volume < 0.1 or max(crystal.lattice.abc) > 40:
+        return False
+    else:
+        return True
+    
 def find_num_atoms(dummy_ind, total_num_atoms):
     # num_atoms states how many atoms are there in each crystal (num_repr + dummy origin)
     actual_num_atoms = []
@@ -106,7 +398,7 @@ def modify_frac_coords_one(frac_coords, site_symm, atom_types, spacegroup):
                 new_atom_types.append(atm_type.cpu().detach().numpy())
                 new_site_symm.append(sym)
         except:
-            print('Weird things happen, and I did not predict correctly')
+            # print('Weird things happen, and I did not predict correctly')
             new_frac_coords.append(frac_coord)
             new_atom_types.append(atm_type.cpu().detach().numpy())
             new_site_symm.append(sym)
@@ -224,16 +516,12 @@ class CSPDiffusion(BaseModule):
 
         c0 = torch.sqrt(alphas_cumprod)
         c1 = torch.sqrt(1. - alphas_cumprod)
-        if c0.ndim == 2:
-            c0_lattice = c0[:, self.beta_scheduler.LATTICE]
-            c1_lattice = c1[:, self.beta_scheduler.LATTICE]
-            c0_atom = c0[:, self.beta_scheduler.ATOM]
-            c1_atom = c1[:, self.beta_scheduler.ATOM]
-            c0_site_symm = c0[:, self.beta_scheduler.SITE_SYMM]
-            c1_site_symm = c1[:, self.beta_scheduler.SITE_SYMM]
-        else:
-            c0_lattice = c0_atom = c0_site_symm = c0
-            c1_lattice = c1_atom = c1_site_symm = c1
+        c0_lattice = c0[:, self.beta_scheduler.LATTICE]
+        c1_lattice = c1[:, self.beta_scheduler.LATTICE]
+        c0_atom = c0[:, self.beta_scheduler.ATOM]
+        c1_atom = c1[:, self.beta_scheduler.ATOM]
+        c0_site_symm = c0[:, self.beta_scheduler.SITE_SYMM]
+        c1_site_symm = c1[:, self.beta_scheduler.SITE_SYMM]
 
         sigmas = self.sigma_scheduler.sigmas[times]
         sigmas_norm = self.sigma_scheduler.sigmas_norm[times]
@@ -364,16 +652,13 @@ class CSPDiffusion(BaseModule):
 
             c0 = 1.0 / torch.sqrt(alphas)
             c1 = (1 - alphas) / torch.sqrt(1 - alphas_cumprod)
-            if c0.ndim == 2:
-                c0_lattice = c0[:, self.beta_scheduler.LATTICE]
-                c1_lattice = c1[:, self.beta_scheduler.LATTICE]
-                c0_atom = c0[:, self.beta_scheduler.ATOM]
-                c1_atom = c1[:, self.beta_scheduler.ATOM]
-                c0_site_symm = c0[:, self.beta_scheduler.SITE_SYMM]
-                c1_site_symm = c1[:, self.beta_scheduler.SITE_SYMM]
-            else:
-                c0_lattice = c0_atom = c0_site_symm = c0
-                c1_lattice = c1_atom = c1_site_symm = c1
+            
+            c0_lattice = c0[self.beta_scheduler.LATTICE]
+            c1_lattice = c1[self.beta_scheduler.LATTICE]
+            c0_atom = c0[self.beta_scheduler.ATOM]
+            c1_atom = c1[self.beta_scheduler.ATOM]
+            c0_site_symm = c0[self.beta_scheduler.SITE_SYMM]
+            c1_site_symm = c1[self.beta_scheduler.SITE_SYMM]
 
             x_t = traj[t]['frac_coords']
             l_t = traj[t]['lattices']
@@ -442,16 +727,16 @@ class CSPDiffusion(BaseModule):
             x_t_minus_1 = x_t_minus_05 - step_size * pred_x + std_x * rand_x if not self.keep_coords else x_t
 
             if self.use_ks:
-                k_t_minus_1 = c0_lattice * (k_t_minus_05 - c1_lattice * pred_l) + sigmas * rand_k if not self.keep_lattice else k_t
+                k_t_minus_1 = c0_lattice * (k_t_minus_05 - c1_lattice * pred_l) + sigmas[self.beta_scheduler.LATTICE] * rand_k if not self.keep_lattice else k_t
                 k_t_minus_1 = mask_ks(k_t_minus_1, ks_mask, ks_add)
                 l_t_minus_1 = lattice_ks_to_matrix_torch(k_t_minus_1) if not self.keep_lattice else l_t
             else:
-                l_t_minus_1 = c0_lattice * (l_t_minus_05 - c1_lattice * pred_l) + sigmas * rand_l if not self.keep_lattice else l_t
+                l_t_minus_1 = c0_lattice * (l_t_minus_05 - c1_lattice * pred_l) + sigmas[self.beta_scheduler.LATTICE] * rand_l if not self.keep_lattice else l_t
                 k_t_minus_1 = k_t
 
-            t_t_minus_1 = c0_atom * (t_t_minus_05 - c1_atom * pred_t) + sigmas * rand_t
+            t_t_minus_1 = c0_atom * (t_t_minus_05 - c1_atom * pred_t) + sigmas[self.beta_scheduler.ATOM] * rand_t
 
-            symm_t_minus_1 = c0_site_symm * (symm_t_minus_05 - c1_site_symm * pred_symm) + sigmas * rand_symm
+            symm_t_minus_1 = c0_site_symm * (symm_t_minus_05 - c1_site_symm * pred_symm) + sigmas[self.beta_scheduler.SITE_SYMM] * rand_symm
 
             traj[t - 1] = {
                 'num_atoms' : batch.num_atoms,
@@ -542,6 +827,56 @@ class CSPDiffusion(BaseModule):
             on_epoch=True,
             prog_bar=True,
         )
+        
+        try:
+            if self.current_epoch in [1500, 1800] and batch_idx == 0:
+                # get training dataset
+                test_set = SampleDataset(
+                    self.hparams.data.root_path.split('/')[-1], 
+                    5 * 2, self.hparams.data.datamodule.datasets.train.save_path)
+                test_loader = DataLoader(test_set, batch_size = 5)
+                
+                frac_coords = []
+                num_atoms = []
+                atom_types = []
+                lattices = []
+                spacegroups = []
+                site_symmetries = []
+                for idx, batch in enumerate(test_loader):
+
+                    if torch.cuda.is_available():
+                        batch.cuda()
+                    outputs, _ = self.sample(batch, step_lr = 1e-5)
+                    frac_coords.append(outputs['frac_coords'].detach().cpu())
+                    num_atoms.append(outputs['num_atoms'].detach().cpu())
+                    atom_types.append(outputs['atom_types'].detach().cpu())
+                    lattices.append(outputs['lattices'].detach().cpu())
+                    spacegroups.append(outputs['spacegroup'].detach().cpu())
+                    site_symmetries.append(outputs['site_symm'].detach().cpu())
+                    del outputs
+
+                frac_coords = torch.cat(frac_coords, dim=0)
+                num_atoms = torch.cat(num_atoms, dim=0)
+                atom_types = torch.cat(atom_types, dim=0)
+                lattices = torch.cat(lattices, dim=0)
+                spacegroups = torch.cat(spacegroups, dim=0)
+                site_symmetries = torch.cat(site_symmetries, dim=0)
+                lengths, angles = lattices_to_params_shape(lattices)
+                
+                pred_crys_array_list = get_crystals_list(frac_coords, atom_types, lengths, angles,num_atoms)
+                
+                gen_crys = p_map(lambda x: Crystal(x), pred_crys_array_list)
+                print("Done generating crystals")
+                csv = pd.read_csv(self.hparams.data.datamodule.datasets.test[0].path)
+                gt_crys = p_map(get_gt_crys_ori, csv['cif'])
+                print("Done reading ground truth crystals")
+                gen_evaluator = GenEval(gen_crys, gt_crys, eval_model_name=self.hparams.data.eval_model_name)
+                gen_metrics = gen_evaluator.get_metrics()
+                print(gen_metrics)
+                self.log_dict(gen_metrics)
+        except:
+            pass
+    
         return loss
 
     def test_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
