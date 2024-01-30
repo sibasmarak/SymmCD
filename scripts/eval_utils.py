@@ -144,15 +144,23 @@ def get_crystals_list(
             spacegroups = kwargs['spacegroups'][batch_idx]
             site_symmetries = kwargs['site_symmetries'].narrow(0, start_idx, num_atom)
             
-        crystal_array_list.append({
-            'frac_coords': cur_frac_coords.detach().cpu().numpy(),
-            'atom_types': cur_atom_types.detach().cpu().numpy(),
-            'lengths': cur_lengths.detach().cpu().numpy(),
-            'angles': cur_angles.detach().cpu().numpy(),
-            # if kwargs is not empty, include the following
-            'spacegroups': spacegroups.detach().cpu().numpy(),
-            'site_symmetries': site_symmetries.detach().cpu().numpy(),
-        })
+            crystal_array_list.append({
+                'frac_coords': cur_frac_coords.detach().cpu().numpy(),
+                'atom_types': cur_atom_types.detach().cpu().numpy(),
+                'lengths': cur_lengths.detach().cpu().numpy(),
+                'angles': cur_angles.detach().cpu().numpy(),
+                # if kwargs is not empty, include the following
+                'spacegroups': spacegroups.detach().cpu().numpy(),
+                'site_symmetries': site_symmetries.detach().cpu().numpy(),
+            })
+        else:
+            crystal_array_list.append({
+                'frac_coords': cur_frac_coords.detach().cpu().numpy(),
+                'atom_types': cur_atom_types.detach().cpu().numpy(),
+                'lengths': cur_lengths.detach().cpu().numpy(),
+                'angles': cur_angles.detach().cpu().numpy(),
+            })
+            
         start_idx = start_idx + num_atom
     return crystal_array_list
 

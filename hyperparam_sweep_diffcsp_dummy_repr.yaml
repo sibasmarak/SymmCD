@@ -1,5 +1,5 @@
 program: diffcsp.run
-method: grid
+method: random
 name: test different hyperparams (mp20 ab-intio, actual, randomly selected repr only)
 parameters:
     expname:
