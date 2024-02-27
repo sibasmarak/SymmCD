@@ -150,12 +150,10 @@ class CSPNet(nn.Module):
         self.atom_latent_emb = nn.Linear(hidden_dim + latent_dim + site_symm_dim + frac_coord_dim, hidden_dim)
         for i in range(0, num_layers):
             if network == 'gnn':
-                print('Using gnn')
                 self.add_module(
                     "csp_layer_%d" % i, CSPLayer(hidden_dim, self.act_fn, self.dis_emb, ln=ln, ip=ip, use_ks=use_ks)
                 )  
             elif network == 'transformer':
-                print('Using transformer')
                 self.add_module(
                     "csp_layer_%d" % i, TransformerConv(in_channels=hidden_dim, out_channels=hidden_dim, heads=6, concat=False)
                 )   

@@ -36,9 +36,8 @@ from smact.screening import pauling_test
 
 from diffcsp.common.utils import PROJECT_ROOT
 from diffcsp.common.data_utils import (
-    EPSILON, cart_to_frac_coords, mard, lengths_angles_to_volume, lattice_params_to_matrix_torch,
-    frac_to_cart_coords, min_distance_sqr_pbc, lattice_ks_to_matrix_torch, get_site_symmetry_binary_repr,
-    check_symmetry, wyckoff_category_to_labels, sg_to_wyckoff_mask, sg_to_ks_mask, mask_ks, N_SPACEGROUPS, StandardScaler, chemical_symbols)
+    lattice_params_to_matrix_torch, lattice_ks_to_matrix_torch, wyckoff_category_to_labels, 
+    sg_to_wyckoff_mask, sg_to_ks_mask, mask_ks, N_SPACEGROUPS, chemical_symbols)
 
 from diffcsp.pl_modules.diff_utils import d_log_p_wrapped_normal
 from diffcsp.pl_modules.model import build_mlp
@@ -364,22 +363,21 @@ def modify_frac_coords_one(frac_coords, site_symm, atom_types, spacegroup):
     takes frac coords of representatives, corresponding predicted wyckoff labels, atom types along with spacegroup
     applies each wyckoff position on frac coords to obtain the entire orbit
     """
-    
-    if not check_symmetry(site_symm, spacegroup):
-        # check if the predicted set of wyckoff position belongs to the spacegroup
-        print("Doesn't satisfy the spacegroup symmetry")
-        return None, 0, None, None
-    
+
     spacegroup = Group(spacegroup.item())
     
     # convert the site_symm from one-hot to categorical
     int_wyckoff_labels = torch.argmax(site_symm, dim=-1)
+
+    # get the string labels for wyckoff positions
+    pred_wp_labels = wyckoff_category_to_labels([int_label.item() for int_label in int_wyckoff_labels])
+    actual_spg_labels = [w.get_label() for w in spacegroup.Wyckoff_positions]
+    if not set(pred_wp_labels).issubset(set(actual_spg_labels)):
+        # check if the predicted set of wyckoff position belongs to the spacegroup
+        hydra.utils.log.warning("Doesn't satisfy the spacegroup symmetry")
+        return None, 0, None, None
     
     new_frac_coords, new_atom_types, new_site_symm = [], [], []
-    
-    # get the string labels for wyckoff positions
-    pred_wp_labels = wyckoff_category_to_labels(int_wyckoff_labels)
-    
     # iterate over frac coords and corresponding site-symm
     for (pred_wp_label, sym, frac_coord, atm_type) in zip(pred_wp_labels, site_symm, frac_coords, atom_types):
         
@@ -387,10 +385,12 @@ def modify_frac_coords_one(frac_coords, site_symm, atom_types, spacegroup):
         wp = spacegroup.get_wyckoff_position(pred_wp_label)
         
         # use wp operations on frac_coord
+        frac_coord = frac_coord.cpu().detach().numpy()
+        frac_coord = search_cloest_wp(spacegroup, wp, wp.ops[0], frac_coord)%1.
         for index in range(len(wp)):
             new_frac_coords.append(wp[index].operate(frac_coord)%1.)
             new_atom_types.append(atm_type.cpu().detach().numpy())
-            new_site_symm.append(sym)
+            new_site_symm.append(sym.cpu().detach().numpy())
             
     new_frac_coords = np.stack(new_frac_coords)
     new_atom_types = np.stack(new_atom_types)
@@ -680,8 +680,8 @@ class CSPDiffusion(BaseModule):
         t_T = torch.randn([batch.num_nodes, MAX_ATOMIC_NUM]).to(self.device)
         
         symm_T = torch.randn([batch.num_nodes, 186]).to(self.device)
-        symm_mask = sg_to_wyckoff_mask(batch.spacegroup)
-        symm_T = symm_mask * symm_T
+        site_symm_mask = sg_to_wyckoff_mask(batch.spacegroup.repeat_interleave(batch.num_atoms)).to(self.device)
+        symm_T = site_symm_mask * symm_T
 
         if self.keep_coords:
             x_T = batch.frac_coords
@@ -704,7 +704,9 @@ class CSPDiffusion(BaseModule):
 
             times = torch.full((batch_size, ), t, device = self.device)
 
-            time_emb = self.time_embedding(times) + self.spacegroup_embedding(batch.sg_condition.reshape(-1, 73))
+            # get diffusion timestep embeddings, concatenated with spacegroup condition    
+            gt_spacegroup_onehot = F.one_hot(batch.spacegroup - 1, num_classes=N_SPACEGROUPS).float()
+            time_emb = self.time_embedding(times) + self.spacegroup_embedding(gt_spacegroup_onehot)
             
             alphas = self.beta_scheduler.alphas[t]
             alphas_cumprod = self.beta_scheduler.alphas_cumprod[t]
@@ -800,7 +802,7 @@ class CSPDiffusion(BaseModule):
             t_t_minus_1 = c0_atom * (t_t_minus_05 - c1_atom * pred_t) + sigmas[self.beta_scheduler.ATOM] * rand_t
 
             symm_t_minus_1 = c0_site_symm * (symm_t_minus_05 - c1_site_symm * pred_symm) + sigmas[self.beta_scheduler.SITE_SYMM] * rand_symm
-            symm_t_minus_1 = symm_mask * symm_t_minus_1
+            symm_t_minus_1 = site_symm_mask * symm_t_minus_1
 
             traj[t - 1] = {
                 'num_atoms' : batch.num_atoms,
@@ -844,8 +846,8 @@ class CSPDiffusion(BaseModule):
         traj[0] = modify_frac_coords(traj[0], batch.spacegroup, traj[0]['num_atoms'])
         
         # sanity checks for size of tensors
-        assert traj[0]['frac_coords'].size(0) == traj[0]['atom_types'].size(0) == traj[0]['num_atoms'].sum()
-        assert traj[0]['ks'].size(0) == traj[0]['lattices'].size(0) == traj[0]['num_atoms'].size(0)
+        assert traj[0]['frac_coords'].size(0) == traj[0]['atom_types'].size(0) == traj[0]['num_atoms'].sum(), breakpoint()
+        assert traj[0]['ks'].size(0) == traj[0]['lattices'].size(0) == traj[0]['num_atoms'].size(0), breakpoint()
 
         return traj[0], traj_stack
 

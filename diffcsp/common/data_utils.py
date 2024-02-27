@@ -159,17 +159,6 @@ def wyckoff_category_to_labels(int_wyckoff_labels):
     """
 
     return [ALL_WYCKOFFS[int_label] for int_label in int_wyckoff_labels]
-    
-def check_symmetry(labels, spacegroups):
-    """
-    labels are one-hot version of which wyckoff positions are present
-    this function checks if the labels are consistent with the spacegroup (i.e., subset of the spacegroup mask)
-    """
-    
-    # obtain wyckoff masks for eacg=h spacegroup
-    wyckoff_masks = sg_to_wyckoff_mask(spacegroups)
-    # check if each predicted labels are a subset of the spacegroup mask
-    return torch.sum(labels * wyckoff_masks, dim=-1) > 0
 
 def sg_to_ks_mask(sg):
     n_lattices = sg.shape[0]
