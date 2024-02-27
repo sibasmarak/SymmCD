@@ -115,6 +115,8 @@ B_MATRICES[4, 2, 2] = -2
 B_MATRICES[5, 0, 0] =  B_MATRICES[5, 1, 1]  = B_MATRICES[5, 2, 2]  = 1
 
 N_SPACEGROUPS = 230
+SG_WYCKOFF_MASK_MAPPER = torch.load('/home/mila/s/siba-smarak.panigrahi/DiffCSP/diffcsp/common/spacegroup_wyckoff_masks.pt')
+ALL_WYCKOFFS = torch.load('/home/mila/s/siba-smarak.panigrahi/DiffCSP/diffcsp/common/wyckoff_labels.pt')
 
 def lattice_from_ks(ks):
     ks = ks.reshape(6, 1, 1)
@@ -131,6 +133,43 @@ def lattice_to_ks(L):
     for i in range(6):
         ks[i] = frobenius_prod(S, B_MATRICES[i]) / frobenius_prod(B_MATRICES[i], B_MATRICES[i])
     return ks
+
+def sg_to_wyckoff_mask(sg):
+    """
+    sg is a batch of spacegroup numbers
+    this function returns the wyckoff mask for each spacegroup
+    """
+    
+    # use SG_WYCKOFF_MASK_MAPPER to obtain the wyckoff mask for each spacegroup
+    wyckoff_masks = [SG_WYCKOFF_MASK_MAPPER[s.item()] for s in sg]
+    return torch.stack(wyckoff_masks, dim=0)
+    
+def wyckoff_labels_to_category(string_wyckoff_labels):
+    """
+    wyckoff_labels is a sequence of (string) wyckoff labels
+    this function returns the corresponding category in the ALL_WYCKOFFS list
+    """
+
+    return [ALL_WYCKOFFS.index(string_label) for string_label in string_wyckoff_labels]
+
+def wyckoff_category_to_labels(int_wyckoff_labels):
+    """
+    wyckoff_labels is a sequence of (int) wyckoff labels
+    this function returns the corresponding string in the ALL_WYCKOFFS list
+    """
+
+    return [ALL_WYCKOFFS[int_label] for int_label in int_wyckoff_labels]
+    
+def check_symmetry(labels, spacegroups):
+    """
+    labels are one-hot version of which wyckoff positions are present
+    this function checks if the labels are consistent with the spacegroup (i.e., subset of the spacegroup mask)
+    """
+    
+    # obtain wyckoff masks for eacg=h spacegroup
+    wyckoff_masks = sg_to_wyckoff_mask(spacegroups)
+    # check if each predicted labels are a subset of the spacegroup mask
+    return torch.sum(labels * wyckoff_masks, dim=-1) > 0
 
 def sg_to_ks_mask(sg):
     n_lattices = sg.shape[0]
@@ -194,6 +233,17 @@ def refine_spacegroup(crystal, tol=0.01):
         coords_are_cartesian=False,
     )
     return crystal, space_group
+
+def get_all_wyckoff_labels():
+    # collect all wyckoff positions available
+    wyckoff_labels = []
+    for spacegroup in range(1, 231):
+        group = Group(spacegroup)
+        for wp in group.Wyckoff_positions:
+            wp_label = wp.get_label()
+            if wp_label not in wyckoff_labels: wyckoff_labels.append(wp_label)
+    
+    return sorted(wyckoff_labels)
 
 def get_site_symmetry_binary_repr(notation:str, label:str = None):
     """Get the binary representation of the site symmetry."""
@@ -310,7 +360,7 @@ def get_site_symmetry_binary_repr(notation:str, label:str = None):
 
 
 def get_symmetry_info(crystal, tol=0.01, num_repr=10, use_random_repr=False):
-    cluster_sites = json.load(open('/workspace/mila-top/crystal_diff/intel-mat-diffusion/cluster_sites.json', 'r'))
+    cluster_sites = json.load(open('/home/mila/s/siba-smarak.panigrahi/DiffCSP/cluster_sites.json', 'r'))
     spga = SpacegroupAnalyzer(crystal, symprec=tol)
     # NOTE: this converts [x,0,0.5] -> [0, 0.5, x] (or the canonical form)
     # basically diffusion model learns the distribution of this refined structure and not the original structure
@@ -1406,7 +1456,6 @@ def process_one(row, niggli, primitive, graph_method, prop_list, use_space_group
         result_dict['site_symm_binary'] = torch.stack(site_repr)
         result_dict['dummy_repr_ind'] = dummy_repr_ind
         result_dict['dummy_origin_ind'] = dummy_origin_ind
-        result_dict['number_representatives'] = sym_info['number_representatives']
 
     else:
         result_dict['spacegroup'] = 1

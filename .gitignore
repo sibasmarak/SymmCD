@@ -165,7 +165,9 @@ cdvae/
 .vscode/
 perov_sweep_output/
 mp_20_sweep_output/
+mp_20_eval_output/
 wandb/
 
 dist.out
 alpha_cumprod.png
+batch_run_eval.sh

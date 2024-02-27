@@ -12,6 +12,8 @@ from diffcsp.common.data_utils import lattice_params_to_matrix_torch, get_pbc_di
 
 from diffcsp.pl_modules.model import build_mlp
 
+from torch_geometric.nn.conv.transformer_conv import TransformerConv
+
 MAX_ATOMIC_NUM=100
 
 class SinusoidsEmbedding(nn.Module):
@@ -101,6 +103,7 @@ class CSPNet(nn.Module):
 
     def __init__(
         self,
+        network='gnn',
         hidden_dim = 128,
         latent_dim = 256,
         num_layers = 4,
@@ -132,7 +135,7 @@ class CSPNet(nn.Module):
             self.node_embedding = nn.Linear(max_atoms, hidden_dim)
         else:
             self.node_embedding = nn.Embedding(max_atoms, hidden_dim)
-        self.site_symm_embedding = nn.Linear(27, latent_dim)
+        self.site_symm_embedding = nn.Linear(186, latent_dim)
         site_symm_dim = latent_dim if self.use_site_symm else 0
         lattice_dim = 9 if self.ip else 6
         frac_coord_dim = 3 if self.use_gt_frac_coords else 0
@@ -146,9 +149,17 @@ class CSPNet(nn.Module):
             frac_coord_dim = self.dis_emb.dim
         self.atom_latent_emb = nn.Linear(hidden_dim + latent_dim + site_symm_dim + frac_coord_dim, hidden_dim)
         for i in range(0, num_layers):
-            self.add_module(
-                "csp_layer_%d" % i, CSPLayer(hidden_dim, self.act_fn, self.dis_emb, ln=ln, ip=ip, use_ks=use_ks)
-            )            
+            if network == 'gnn':
+                print('Using gnn')
+                self.add_module(
+                    "csp_layer_%d" % i, CSPLayer(hidden_dim, self.act_fn, self.dis_emb, ln=ln, ip=ip, use_ks=use_ks)
+                )  
+            elif network == 'transformer':
+                print('Using transformer')
+                self.add_module(
+                    "csp_layer_%d" % i, TransformerConv(in_channels=hidden_dim, out_channels=hidden_dim, heads=6, concat=False)
+                )   
+        self.network = network       
         self.num_layers = num_layers
         self.coord_out = nn.Linear(hidden_dim, 3, bias = False)
         self.lattice_out = nn.Linear(hidden_dim, lattice_dim, bias = False)
@@ -163,8 +174,8 @@ class CSPNet(nn.Module):
         if self.pred_type:
             self.type_out = nn.Linear(hidden_dim, max_atoms)
         if self.pred_site_symm_type:
-            self.site_symm_in = nn.Linear(27, hidden_dim) 
-            self.site_symm_out = nn.Linear(hidden_dim, 27)
+            self.site_symm_in = nn.Linear(186, hidden_dim) 
+            self.site_symm_out = nn.Linear(hidden_dim, 186)
 
     def select_symmetric_edges(self, tensor, mask, reorder_idx, inverse_neg):
         # Mask out counter-edges
@@ -295,7 +306,10 @@ class CSPNet(nn.Module):
         node_features = self.atom_latent_emb(node_features)
 
         for i in range(0, self.num_layers):
-            node_features = self._modules["csp_layer_%d" % i](node_features, frac_coords, lattice_feats, edges, edge2graph, frac_diff = frac_diff)
+            if self.network == 'transformer':
+                node_features = self._modules["csp_layer_%d" % i](node_features, edges)
+            elif self.network == 'gnn':
+                node_features = self._modules["csp_layer_%d" % i](node_features, frac_coords, lattice_feats, edges, edge2graph, frac_diff = frac_diff)
 
         if self.ln:
             node_features = self.final_layer_norm(node_features)
@@ -311,13 +325,13 @@ class CSPNet(nn.Module):
         if self.pred_type and self.pred_site_symm_type:
             type_out = self.type_out(node_features)
             site_symm_out = self.site_symm_out(node_features)
-            return lattice_out, coord_out, type_out, site_symm_out.reshape(-1, 27)
+            return lattice_out, coord_out, type_out, site_symm_out.reshape(-1, 186)
         if self.pred_type and not self.pred_site_symm_type:
             type_out = self.type_out(node_features)
             return lattice_out, coord_out, type_out
         if not self.pred_type and self.pred_site_symm_type:
             site_symm_out = self.site_symm_out(node_features)
-            return lattice_out, coord_out, site_symm_out.reshape(-1, 27)
+            return lattice_out, coord_out, site_symm_out.reshape(-1, 186)
 
         return lattice_out, coord_out
 

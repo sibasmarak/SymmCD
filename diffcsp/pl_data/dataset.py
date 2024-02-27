@@ -11,7 +11,7 @@ import numpy as np
 
 from diffcsp.common.utils import PROJECT_ROOT
 from diffcsp.common.data_utils import (
-    preprocess, preprocess_tensors, add_scaled_lattice_prop)
+    preprocess, preprocess_tensors, add_scaled_lattice_prop, wyckoff_labels_to_category)
 
 
 class CrystDataset(Dataset):
@@ -85,7 +85,7 @@ class CrystDataset(Dataset):
             # Find indices where this identifier occurs
             indices = np.where(identifiers == identifier)[0]
             # Randomly select one index and set it to 1 in the mask tensor
-            mask[random.choice(indices)] = 1
+            mask[indices[0]] = 1
             
         frac_coords = frac_coords[mask.astype(bool)]
         atom_types = atom_types[mask.astype(bool)]
@@ -123,6 +123,8 @@ class CrystDataset(Dataset):
             changes = torch.cat((torch.tensor([0]), changes, torch.tensor([len(identifiers_torch)])))
             consecutive_counts_torch = torch.diff(changes)
             data.x_loss_coeff = consecutive_counts_torch.reshape(-1, 1)
+            
+            data.wyckoff_labels = torch.LongTensor(wyckoff_labels_to_category(data_dict['labels']))[mask.astype(bool)]
 
         assert len(data.site_symm) == len(data.frac_coords) == len(data.atom_types) == len(data.x_loss_coeff), breakpoint()
         if self.use_pos_index:
