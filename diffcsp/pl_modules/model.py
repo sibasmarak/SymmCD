@@ -20,8 +20,8 @@ MAX_ATOMIC_NUM = 100
 def build_mlp(in_dim, hidden_dim, fc_num_layers, out_dim):
     mods = [nn.Linear(in_dim, hidden_dim), nn.ReLU()]
     for i in range(fc_num_layers-1):
-        mods += [nn.Linear(hidden_dim, hidden_dim), nn.ReLU()]
-    mods += [nn.Linear(hidden_dim, out_dim)]
+        mods += [nn.LayerNorm(hidden_dim), nn.Linear(hidden_dim, hidden_dim), nn.ReLU()]
+    mods += [nn.LayerNorm(hidden_dim), nn.Linear(hidden_dim, out_dim)]
     return nn.Sequential(*mods)
 
 

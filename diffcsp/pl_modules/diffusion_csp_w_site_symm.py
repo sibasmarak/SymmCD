@@ -1,4 +1,4 @@
-import math, copy
+import math, copy, json
 
 import numpy as np
 
@@ -30,6 +30,7 @@ from diffcsp.pl_modules.diff_utils import d_log_p_wrapped_normal
 from diffcsp.pl_modules.model import build_mlp
 
 MAX_ATOMIC_NUM=101
+CLUSTERED_SITES = json.load(open('/home/mila/s/siba-smarak.panigrahi/DiffCSP/cluster_sites.json', 'r'))
 
 def find_num_atoms(dummy_ind, total_num_atoms):
     # num_atoms states how many atoms are there in each crystal (num_repr + dummy origin)
@@ -43,8 +44,26 @@ def find_num_atoms(dummy_ind, total_num_atoms):
     return torch.tensor(actual_num_atoms)
 
 def split_argmax_sitesymm(site_symm:torch.Tensor) -> np.ndarray:
-    # site_symm : num_repr x 66
-    return np.array(np.abs(1 - site_symm.cpu().detach().numpy()) < 0.1, dtype=float)
+    # site_symm : num_repr x 27
+    site_symm = torch.sigmoid(site_symm).reshape(-1, 3, 9)
+    # Initialize the result tensor with zeros
+    result = torch.zeros_like(site_symm, dtype=torch.int64)
+
+    # Compute argmax indices for each part
+    argmax1 = site_symm[..., :2].argmax(dim=-1)
+    argmax2 = site_symm[..., 2:7].argmax(dim=-1) + 2  # offset by 2
+    argmax3 = site_symm[..., 7:].argmax(dim=-1) + 7  # offset by 7
+
+    # Expanding dimensions to use for advanced indexing
+    batch_range = torch.arange(site_symm.size(0)).unsqueeze(-1).unsqueeze(-1).expand(-1, site_symm.size(1), -1)
+    row_range = torch.arange(site_symm.size(1)).unsqueeze(0).unsqueeze(-1).expand(site_symm.size(0), -1, -1)
+
+    # Update the result tensor using advanced indexing
+    result[batch_range, row_range, argmax1.unsqueeze(-1)] = 1
+    result[batch_range, row_range, argmax2.unsqueeze(-1)] = 1
+    result[batch_range, row_range, argmax3.unsqueeze(-1)] = 1
+
+    return result.cpu().detach().numpy().reshape(-1, 27)
 
 
 def modify_frac_coords_one(frac_coords, site_symm, atom_types, spacegroup):
@@ -58,11 +77,11 @@ def modify_frac_coords_one(frac_coords, site_symm, atom_types, spacegroup):
     wp_to_binary = dict()
     for wp in Group(spacegroup).Wyckoff_positions:
         wp.get_site_symmetry()
-        wp_to_binary[wp] = get_site_symmetry_binary_repr(wp.site_symm, label=wp.get_label()).numpy()
+        wp_to_binary[wp] = get_site_symmetry_binary_repr(CLUSTERED_SITES[wp.site_symm], label=wp.get_label()).numpy()
      
      
     # iterate over frac coords and corresponding site-symm
-    new_frac_coords, new_atom_types = [], []
+    new_frac_coords, new_atom_types, new_site_symm = [], [], []
     for (sym, frac_coord, atm_type) in zip(site_symm_argmax, frac_coords, atom_types):
         frac_coord = frac_coord.cpu().detach().numpy()
         
@@ -70,33 +89,32 @@ def modify_frac_coords_one(frac_coords, site_symm, atom_types, spacegroup):
         closes = []   
         for wp, binary in wp_to_binary.items():
             if np.sum(np.equal(binary, sym)) == sym.shape[-1]:
-                close = search_cloest_wp(Group(spacegroup), wp, wp.ops[0], frac_coord)
-                closes.append((close, wp, np.linalg.norm(np.minimum((close - frac_coord)%1., (frac_coord - close)%1.))))
+                for orbit_index in range(len(wp.ops)):
+                    close = search_cloest_wp(Group(spacegroup), wp, wp.ops[orbit_index], frac_coord)%1.
+                    closes.append((close, wp, orbit_index, np.linalg.norm(np.minimum((close - frac_coord)%1., (frac_coord - close)%1.))))
         try:
             # pick the nearest wp to project
             closest = sorted(closes, key=lambda x: x[-1])[0]
             wyckoff = closest[1]
+            repr_index = closest[2]
             
             # use wp operations on frac_coord
             frac_coord = closest[0]
             for index in range(len(wyckoff)): 
-                new_frac_coords.append(wyckoff[index].operate(frac_coord) % 1.)
+                # new_frac_coords.append(wyckoff[index].operate(frac_coord)%1.)
+                new_frac_coords.append(wyckoff[(index + repr_index) % len(wyckoff)].operate(frac_coord)%1.)
                 new_atom_types.append(atm_type.cpu().detach().numpy())
+                new_site_symm.append(sym)
         except:
-            print('Weird things happen, and I did not predict correctly')
+            # print('Weird things happen, and I did not predict correctly')
             new_frac_coords.append(frac_coord)
             new_atom_types.append(atm_type.cpu().detach().numpy())
+            new_site_symm.append(sym)
         
-    try:
-        new_frac_coords = np.stack(new_frac_coords)
-        new_atom_types = np.stack(new_atom_types)
-    except:
-        print('Weird things happen in try except block')
-        print(frac_coords)
-        print(new_frac_coords)
-        new_frac_coords = frac_coords.cpu().detach().numpy()
-        new_atom_types = atom_types.cpu().detach().numpy()
-    return new_frac_coords, len(new_frac_coords), new_atom_types
+    new_frac_coords = np.stack(new_frac_coords)
+    new_atom_types = np.stack(new_atom_types)
+    new_site_symm = np.stack(new_site_symm)
+    return new_frac_coords, len(new_frac_coords), new_atom_types, new_site_symm
 
 def modify_frac_coords(traj:Dict, spacegroups:List[int], num_repr:List[int]) -> Dict:
     device = traj['frac_coords'].device
@@ -104,14 +122,15 @@ def modify_frac_coords(traj:Dict, spacegroups:List[int], num_repr:List[int]) -> 
     updated_frac_coords = []
     updated_num_atoms = []
     updated_atom_types = []
+    updated_site_symm = []
     
     for index in range(len(num_repr)):
         if num_repr[index] > 0:
             # if something is predicted, otherwise it is an empty crystal which we are post-processing
             # this might happen if we predict a crystal with only dummy representative atoms
-            new_frac_coords, new_num_atoms, new_atom_types = modify_frac_coords_one(
+            new_frac_coords, new_num_atoms, new_atom_types, new_site_sym = modify_frac_coords_one(
                     traj['frac_coords'][total_atoms:total_atoms+num_repr[index]], # num_repr x 3
-                    traj['site_symm'][total_atoms:total_atoms+num_repr[index]], # num_repr x 66
+                    traj['site_symm'][total_atoms:total_atoms+num_repr[index]], # num_repr x 27
                     traj['atom_types'][total_atoms:total_atoms+num_repr[index]], # num_repr x 100
                     spacegroups[index], 
                 )
@@ -119,12 +138,14 @@ def modify_frac_coords(traj:Dict, spacegroups:List[int], num_repr:List[int]) -> 
             updated_frac_coords.append(new_frac_coords)
             updated_num_atoms.append(new_num_atoms)
             updated_atom_types.append(new_atom_types)
-            
+            updated_site_symm.append(new_site_sym)
+        
         total_atoms += num_repr[index]
     
     traj['frac_coords'] = torch.cat([torch.from_numpy(x) for x in updated_frac_coords]).to(device)
     traj['atom_types'] = torch.cat([torch.from_numpy(x) for x in updated_atom_types]).to(device)
     traj['num_atoms'] = torch.tensor(updated_num_atoms).to(device)
+    traj['site_symm'] = torch.cat([torch.from_numpy(x) for x in updated_site_symm]).to(device)
     
     return traj
 
@@ -181,7 +202,7 @@ class CSPDiffusion(BaseModule):
         self.sigma_scheduler = hydra.utils.instantiate(self.hparams.sigma_scheduler)
         self.time_dim = self.hparams.time_dim
         self.time_embedding = SinusoidalTimeEmbeddings(self.time_dim)
-        self.spacegroup_embedding = build_mlp(in_dim=66, hidden_dim=128, fc_num_layers=2, out_dim=self.time_dim)
+        self.spacegroup_embedding = build_mlp(in_dim=73, hidden_dim=128, fc_num_layers=2, out_dim=self.time_dim)
         self.keep_lattice = self.hparams.cost_lattice < 1e-5
         self.keep_coords = self.hparams.cost_coord < 1e-5
         self.use_ks = self.hparams.use_ks
@@ -192,17 +213,22 @@ class CSPDiffusion(BaseModule):
 
         batch_size = batch.num_graphs
         
-        dummy_origin_ind = batch.dummy_origin_ind
         dummy_repr_ind = batch.dummy_repr_ind
         
         times = self.beta_scheduler.uniform_sample_t(batch_size, self.device)
-        time_emb = self.time_embedding(times) + self.spacegroup_embedding(batch.sg_condition.reshape(-1, 66))
+        time_emb = self.time_embedding(times) + self.spacegroup_embedding(batch.sg_condition.reshape(-1, 73))
 
         alphas_cumprod = self.beta_scheduler.alphas_cumprod[times]
-        beta = self.beta_scheduler.betas[times]
+
 
         c0 = torch.sqrt(alphas_cumprod)
         c1 = torch.sqrt(1. - alphas_cumprod)
+        c0_lattice = c0[:, self.beta_scheduler.LATTICE]
+        c1_lattice = c1[:, self.beta_scheduler.LATTICE]
+        c0_atom = c0[:, self.beta_scheduler.ATOM]
+        c1_atom = c1[:, self.beta_scheduler.ATOM]
+        c0_site_symm = c0[:, self.beta_scheduler.SITE_SYMM]
+        c1_site_symm = c1[:, self.beta_scheduler.SITE_SYMM]
 
         sigmas = self.sigma_scheduler.sigmas[times]
         sigmas_norm = self.sigma_scheduler.sigmas_norm[times]
@@ -219,18 +245,13 @@ class CSPDiffusion(BaseModule):
         rand_x = torch.randn_like(frac_coords)
         rand_ks = torch.randn_like(ks)
         rand_l = torch.randn_like(lattices)
-        
-        # keep the dummy origin atom fixed (no noise addition)
-        # add noise to the dummy repr atoms (which will be fed as input to the denoising network)
-        rand_x = rand_x * (1 - dummy_origin_ind.reshape(-1, 1)) 
 
-        input_ks = c0[:, None] * ks + c1[:, None] * rand_ks
-        input_ks = mask_ks(input_ks, ks_mask, ks_add)
-        
         if self.use_ks:
+            input_ks = c0_lattice[:, None] * ks + c1_lattice[:, None] * rand_ks
+            input_ks = mask_ks(input_ks, ks_mask, ks_add)
             input_lattice = lattice_ks_to_matrix_torch(input_ks)
         else:
-            input_lattice = c0[:, None, None] * lattices + c1[:, None, None] * rand_l
+            input_lattice = c0_lattice[:, None, None] * lattices + c1_lattice[:, None, None] * rand_l
             
             
         sigmas_per_atom = sigmas.repeat_interleave(batch.num_atoms)[:, None]
@@ -243,14 +264,8 @@ class CSPDiffusion(BaseModule):
         rand_t = torch.randn_like(gt_atom_types_onehot)
         rand_symm = torch.randn_like(gt_site_symm_binary)
 
-        atom_type_probs = (c0.repeat_interleave(batch.num_atoms)[:, None] * gt_atom_types_onehot + c1.repeat_interleave(batch.num_atoms)[:, None] * rand_t)
-        site_symm_probs = (c0.repeat_interleave(batch.num_atoms)[:, None] * gt_site_symm_binary + c1.repeat_interleave(batch.num_atoms)[:, None] * rand_symm)
-
-        # we care about the atom types of the dummy repr (we should penalize if the denoising network doesn't learn)
-        # we don't care about the frac coords/symmetry of the dummy repr (we should not penalize if the denoising network doesn't learns)  
-        atom_type_probs = atom_type_probs * (1 - dummy_origin_ind.reshape(-1, 1)) 
-        atom_type_probs[:, -1] = atom_type_probs[:, -1] + dummy_origin_ind.reshape(-1, )
-        site_symm_probs = site_symm_probs * (1 - dummy_origin_ind.reshape(-1, 1)) 
+        atom_type_probs = (c0_atom.repeat_interleave(batch.num_atoms)[:, None] * gt_atom_types_onehot + c1_atom.repeat_interleave(batch.num_atoms)[:, None] * rand_t)
+        site_symm_probs = (c0_site_symm.repeat_interleave(batch.num_atoms)[:, None] * gt_site_symm_binary + c1_site_symm.repeat_interleave(batch.num_atoms)[:, None] * rand_symm)
 
         if self.keep_coords:
             input_frac_coords = frac_coords
@@ -261,35 +276,19 @@ class CSPDiffusion(BaseModule):
 
         # pass noised site symmetries and behave similar to atom type probs
         lattice_feats = input_ks if self.use_ks else input_lattice
-        pred_lattice, pred_x, pred_symm = self.decoder(time_emb, batch.atom_types, input_frac_coords, lattice_feats, input_lattice, batch.num_atoms, batch.batch, site_symm_probs=site_symm_probs)
+        pred_lattice, pred_x, pred_symm = self.decoder(time_emb, batch.atom_types, input_frac_coords, 
+                                                       lattice_feats, input_lattice, batch.num_atoms, 
+                                                       batch.batch, site_symm_probs=site_symm_probs)
 
         tar_x = d_log_p_wrapped_normal(sigmas_per_atom * rand_x, sigmas_per_atom) / torch.sqrt(sigmas_norm_per_atom)
 
-        if self.use_ks:
-            loss_lattice = F.mse_loss(pred_lattice, ks_mask * rand_ks)
-        else:
-            loss_lattice = F.mse_loss(pred_lattice, rand_l)
+        loss_lattice = F.mse_loss(pred_lattice, ks_mask * rand_ks) if self.use_ks else F.mse_loss(pred_lattice, rand_l)
 
-        # must correctly predict type of dummy repr
-        # position and symmetries do not matter for dummy repr 
-        # but we have to predict symm so that the distribution seen during training and sampling stays similar
-
-        if self.hparams.decoder.use_site_symm:
-            loss_coord = F.mse_loss(
-                pred_x * (1 - dummy_origin_ind.reshape(-1, 1)), 
-                tar_x * (1 - dummy_origin_ind.reshape(-1, 1)))
-
-            loss_symm = F.mse_loss(
-                pred_symm * (1 - dummy_origin_ind.reshape(-1, 1)), 
-                rand_symm * (1 - dummy_origin_ind.reshape(-1, 1)))
-        else:
-            loss_coord = F.mse_loss(
-                pred_x * (1 - (dummy_origin_ind.reshape(-1, 1) + dummy_repr_ind.reshape(-1, 1))),
-                tar_x * (1 - (dummy_origin_ind.reshape(-1, 1) + dummy_repr_ind.reshape(-1, 1))))
-            
-            loss_symm = F.mse_loss(
-                pred_symm * (1 - (dummy_origin_ind.reshape(-1, 1) + dummy_repr_ind.reshape(-1, 1))), 
-                rand_symm * (1 - (dummy_origin_ind.reshape(-1, 1) + dummy_repr_ind.reshape(-1, 1))))
+        # loss_coord = F.mse_loss(pred_x * (1 - dummy_repr_ind), tar_x * (1 - dummy_repr_ind))
+        loss_coord = torch.mean(torch.sqrt(batch.x_loss_coeff) * F.mse_loss(pred_x, tar_x, reduction='none'))
+        
+        # loss_symm = F.mse_loss(pred_symm * (1 - dummy_repr_ind), rand_symm * (1 - dummy_repr_ind))
+        loss_symm = F.mse_loss(pred_symm, rand_symm)
 
 
         loss = (
@@ -322,25 +321,12 @@ class CSPDiffusion(BaseModule):
         t_T = torch.randn([batch.num_nodes, MAX_ATOMIC_NUM]).to(self.device)
         symm_T = torch.randn([batch.num_nodes, 66]).to(self.device)
 
-        # create mask for null/dummy elements
-        # multiply by mask to fix the null elements at origin 
-        null_element_mask = torch.zeros(batch.num_nodes).to(self.device)
-        null_element_mask.scatter_(0, torch.cumsum(batch.num_atoms, dim=0) - 1, 1.0) # uncomment when there is dummy element
-        
-        x_T = x_T * (1 - null_element_mask[:, None])
-        t_T = t_T * (1 - null_element_mask[:, None])
-        t_T[:, -1] = t_T[:, -1] + null_element_mask
-        symm_T = symm_T * (1 - null_element_mask[:, None])
-
         if self.keep_coords:
             x_T = batch.frac_coords
 
         if self.keep_lattice:
             k_T = batch.ks
-            if self.use_ks:
-                l_T = lattice_ks_to_matrix_torch(k_T)
-            else:
-                l_T = lattice_params_to_matrix_torch(batch.lengths, batch.angles)
+            l_T = lattice_ks_to_matrix_torch(k_T) if self.use_ks else lattice_params_to_matrix_torch(batch.lengths, batch.angles)
         
 
         traj = {self.beta_scheduler.timesteps : {
@@ -357,7 +343,7 @@ class CSPDiffusion(BaseModule):
 
             times = torch.full((batch_size, ), t, device = self.device)
 
-            time_emb = self.time_embedding(times) + self.spacegroup_embedding(batch.sg_condition.reshape(-1, 66))
+            time_emb = self.time_embedding(times) + self.spacegroup_embedding(batch.sg_condition.reshape(-1, 73))
             
             alphas = self.beta_scheduler.alphas[t]
             alphas_cumprod = self.beta_scheduler.alphas_cumprod[t]
@@ -368,6 +354,13 @@ class CSPDiffusion(BaseModule):
 
             c0 = 1.0 / torch.sqrt(alphas)
             c1 = (1 - alphas) / torch.sqrt(1 - alphas_cumprod)
+            
+            c0_lattice = c0[self.beta_scheduler.LATTICE]
+            c1_lattice = c1[self.beta_scheduler.LATTICE]
+            c0_atom = c0[self.beta_scheduler.ATOM]
+            c1_atom = c1[self.beta_scheduler.ATOM]
+            c0_site_symm = c0[self.beta_scheduler.SITE_SYMM]
+            c1_site_symm = c1[self.beta_scheduler.SITE_SYMM]
 
             x_t = traj[t]['frac_coords']
             l_t = traj[t]['lattices']
@@ -394,12 +387,9 @@ class CSPDiffusion(BaseModule):
             std_x = torch.sqrt(2 * step_size)
 
             lattice_feats_t = k_t if self.use_ks else l_t
-            pred_l, pred_x, pred_symm = self.decoder(time_emb, batch.atom_types, x_t, lattice_feats_t, l_t, batch.num_atoms, batch.batch, site_symm_probs=symm_t)
-
-            # multiply by mask to fix the null elements at origin
-            pred_x = pred_x * torch.sqrt(sigma_norm) * (1 - null_element_mask[:, None])
-            rand_x = rand_x * (1 - null_element_mask[:, None])
-
+            _, pred_x, _ = self.decoder(time_emb, batch.atom_types, x_t, lattice_feats_t, l_t, batch.num_atoms, batch.batch, site_symm_probs=symm_t)
+            pred_x = pred_x * torch.sqrt(sigma_norm)
+            
             x_t_minus_05 = x_t - step_size * pred_x + std_x * rand_x if not self.keep_coords else x_t
 
             l_t_minus_05 = l_t
@@ -422,24 +412,21 @@ class CSPDiffusion(BaseModule):
             std_x = torch.sqrt((adjacent_sigma_x ** 2 * (sigma_x ** 2 - adjacent_sigma_x ** 2)) / (sigma_x ** 2))   
             lattice_feats_t_minus_05 = k_t_minus_05 if self.use_ks else l_t_minus_05
 
-            pred_lattice, pred_x, pred_symm = self.decoder(time_emb, batch.atom_types, x_t_minus_05, lattice_feats_t_minus_05, l_t_minus_05, batch.num_atoms, batch.batch, site_symm_probs=symm_t_minus_05)
-
-            # multiply by mask to fix the null elements at origin
-            pred_x = pred_x * torch.sqrt(sigma_norm) * (1 - null_element_mask[:, None])
-            rand_x = rand_x * (1 - null_element_mask[:, None])
+            pred_l, pred_x, pred_symm = self.decoder(time_emb, batch.atom_types, x_t_minus_05, 
+                                                           lattice_feats_t_minus_05, l_t_minus_05, batch.num_atoms, 
+                                                           batch.batch, site_symm_probs=symm_t_minus_05)
 
             x_t_minus_1 = x_t_minus_05 - step_size * pred_x + std_x * rand_x if not self.keep_coords else x_t
 
             if self.use_ks:
-                k_t_minus_1 = c0 * (k_t_minus_05 - c1 * pred_lattice) + sigmas * rand_k if not self.keep_lattice else k_t
+                k_t_minus_1 = c0_lattice * (k_t_minus_05 - c1_lattice * pred_l) + sigmas[self.beta_scheduler.LATTICE] * rand_k if not self.keep_lattice else k_t
                 k_t_minus_1 = mask_ks(k_t_minus_1, ks_mask, ks_add)
                 l_t_minus_1 = lattice_ks_to_matrix_torch(k_t_minus_1) if not self.keep_lattice else l_t
             else:
-                l_t_minus_1 = c0 * (l_t_minus_05 - c1 * pred_lattice) + sigmas * rand_l if not self.keep_lattice else l_t
+                l_t_minus_1 = c0_lattice * (l_t_minus_05 - c1_lattice * pred_l) + sigmas[self.beta_scheduler.LATTICE] * rand_l if not self.keep_lattice else l_t
                 k_t_minus_1 = k_t
 
-            symm_t_minus_1 = c0 * (symm_t_minus_05 - c1 * pred_symm * (1 - null_element_mask[:, None])) + sigmas * rand_symm * (1 - null_element_mask[:, None])
-            symm_t_minus_1 = symm_t_minus_1 * (1 - null_element_mask[:, None])
+            symm_t_minus_1 = c0_site_symm * (symm_t_minus_05 - c1_site_symm * pred_symm) + sigmas[self.beta_scheduler.SITE_SYMM] * rand_symm
 
             traj[t - 1] = {
                 'num_atoms' : batch.num_atoms,
@@ -475,14 +462,16 @@ class CSPDiffusion(BaseModule):
         empty_crystals = (traj[0]['num_atoms'] == 0).long()
         traj[0]['ks'] = traj[0]['ks'][(1 - empty_crystals).bool()]
         traj[0]['lattices'] = traj[0]['lattices'][(1 - empty_crystals).bool()]
+        print(f"Number of empty crystals generated: {empty_crystals.sum().item()}/{batch_size}")
         
         # use predicted site symmetry to create copies of atoms
+        # frac coords, atom types and num atoms removed for empty crystals in modify_frac_coords()
         traj[0] = modify_frac_coords(traj[0], batch.spacegroup, traj[0]['num_atoms']) 
         
         # sanity checks for size of tensors
         assert traj[0]['frac_coords'].size(0) == traj[0]['atom_types'].size(0) == traj[0]['num_atoms'].sum()
         assert traj[0]['ks'].size(0) == traj[0]['lattices'].size(0) == traj[0]['num_atoms'].size(0)
-        
+
         return traj[0], traj_stack
 
 

@@ -36,9 +36,8 @@ from smact.screening import pauling_test
 
 from diffcsp.common.utils import PROJECT_ROOT
 from diffcsp.common.data_utils import (
-    EPSILON, cart_to_frac_coords, mard, lengths_angles_to_volume, lattice_params_to_matrix_torch,
-    frac_to_cart_coords, min_distance_sqr_pbc, lattice_ks_to_matrix_torch, get_site_symmetry_binary_repr,
-    sg_to_ks_mask, mask_ks, N_SPACEGROUPS, StandardScaler, chemical_symbols)
+    lattice_params_to_matrix_torch, lattice_ks_to_matrix_torch, wyckoff_category_to_labels, 
+    sg_to_wyckoff_mask, sg_to_ks_mask, mask_ks, N_SPACEGROUPS, chemical_symbols)
 
 from diffcsp.pl_modules.diff_utils import d_log_p_wrapped_normal
 from diffcsp.pl_modules.model import build_mlp
@@ -52,8 +51,8 @@ from scripts.eval_utils import (
     load_config, load_data, get_crystals_list, prop_model_eval, compute_cov)
 
 MAX_ATOMIC_NUM=101
-CLUSTERED_SITES = json.load(open('/workspace/mila-top/crystal_diff/intel-mat-diffusion/cluster_sites.json', 'r'))
-# CLUSTERED_SITES = json.load(open('/home/mila/s/siba-smarak.panigrahi/DiffCSP/cluster_sites.json', 'r'))
+CLUSTERED_SITES = json.load(open('/home/mila/s/siba-smarak.panigrahi/DiffCSP/cluster_sites.json', 'r'))
+spacegroup_ops_mapper = torch.load('/home/mila/s/siba-smarak.panigrahi/DiffCSP/diffcsp/common/spacegroup_ops_mapper.pt')
 COV_Cutoffs = {
     'mp20': {'struc': 0.4, 'comp': 10.},
     'carbon': {'struc': 0.2, 'comp': 4.},
@@ -359,54 +358,93 @@ def split_argmax_sitesymm(site_symm:torch.Tensor) -> np.ndarray:
 
 
 def modify_frac_coords_one(frac_coords, site_symm, atom_types, spacegroup):
-    spacegroup = spacegroup.item()
+    """
+    perform replication for one crystal
+    takes frac coords of representatives, corresponding predicted wyckoff labels, atom types along with spacegroup
+    applies each wyckoff position on frac coords to obtain the entire orbit
+    """
+
+    spacegroup = Group(spacegroup.item())
     
+    # convert the site_symm from one-hot to categorical
+    int_wyckoff_labels = torch.argmax(site_symm, dim=-1)
+
+    # get the string labels for wyckoff positions
+    pred_wp_labels = wyckoff_category_to_labels([int_label.item() for int_label in int_wyckoff_labels])
+    actual_spg_labels = [w.get_label() for w in spacegroup.Wyckoff_positions]
+    if not set(pred_wp_labels).issubset(set(actual_spg_labels)):
+        # check if the predicted set of wyckoff position belongs to the spacegroup
+        hydra.utils.log.warning("Doesn't satisfy the spacegroup symmetry")
+        return None, 0, None, None
     
-    # perform split-argmax to obtain binary representation
-    site_symm_argmax = split_argmax_sitesymm(site_symm)
-    
-    # mapping from binary representation to hm-notation
-    wp_to_binary = dict()
-    for wp in Group(spacegroup).Wyckoff_positions:
-        wp.get_site_symmetry()
-        wp_to_binary[wp] = get_site_symmetry_binary_repr(CLUSTERED_SITES[wp.site_symm], label=wp.get_label()).numpy()
-     
-     
-    # iterate over frac coords and corresponding site-symm
     new_frac_coords, new_atom_types, new_site_symm = [], [], []
-    for (sym, frac_coord, atm_type) in zip(site_symm_argmax, frac_coords, atom_types):
+    # iterate over frac coords and corresponding site-symm
+    for (pred_wp_label, sym, frac_coord, atm_type) in zip(pred_wp_labels, site_symm, frac_coords, atom_types):
+        
+        # get the wyckoff position based on the predicted site symmetry
+        wp = spacegroup.get_wyckoff_position(pred_wp_label)
+        
+        # use wp operations on frac_coord
         frac_coord = frac_coord.cpu().detach().numpy()
-        
-        # find all wps whose hm-notation align with sym
-        closes = []   
-        for wp, binary in wp_to_binary.items():
-            if np.sum(np.equal(binary, sym)) == sym.shape[-1]:
-                for orbit_index in range(len(wp.ops)):
-                    close = search_cloest_wp(Group(spacegroup), wp, wp.ops[orbit_index], frac_coord)%1.
-                    closes.append((close, wp, orbit_index, np.linalg.norm(np.minimum((close - frac_coord)%1., (frac_coord - close)%1.))))
-        try:
-            # pick the nearest wp to project
-            closest = sorted(closes, key=lambda x: x[-1])[0]
-            wyckoff = closest[1]
-            repr_index = closest[2]
-            
-            # use wp operations on frac_coord
-            frac_coord = closest[0]
-            for index in range(len(wyckoff)): 
-                # new_frac_coords.append(wyckoff[index].operate(frac_coord)%1.)
-                new_frac_coords.append(wyckoff[(index + repr_index) % len(wyckoff)].operate(frac_coord)%1.)
-                new_atom_types.append(atm_type.cpu().detach().numpy())
-                new_site_symm.append(sym)
-        except:
-            # print('Weird things happen, and I did not predict correctly')
-            new_frac_coords.append(frac_coord)
+        frac_coord = search_cloest_wp(spacegroup, wp, wp.ops[0], frac_coord)%1.
+        for index in range(len(wp)):
+            new_frac_coords.append(wp[index].operate(frac_coord)%1.)
             new_atom_types.append(atm_type.cpu().detach().numpy())
-            new_site_symm.append(sym)
-        
+            new_site_symm.append(sym.cpu().detach().numpy())
+            
     new_frac_coords = np.stack(new_frac_coords)
     new_atom_types = np.stack(new_atom_types)
     new_site_symm = np.stack(new_site_symm)
     return new_frac_coords, len(new_frac_coords), new_atom_types, new_site_symm
+
+# def modify_frac_coords_one(frac_coords, site_symm, atom_types, spacegroup):
+#     spacegroup = spacegroup.item()
+    
+#     # perform split-argmax to obtain binary representation
+#     site_symm_argmax = split_argmax_sitesymm(site_symm)
+    
+#     # mapping from binary representation to hm-notation
+#     wp_to_binary = dict()
+#     for wp in Group(spacegroup).Wyckoff_positions:
+#         wp.get_site_symmetry()
+#         wp_to_binary[wp] = get_site_symmetry_binary_repr(CLUSTERED_SITES[wp.site_symm], label=wp.get_label()).numpy()
+     
+     
+#     # iterate over frac coords and corresponding site-symm
+#     new_frac_coords, new_atom_types, new_site_symm = [], [], []
+#     for (sym, frac_coord, atm_type) in zip(site_symm_argmax, frac_coords, atom_types):
+#         frac_coord = frac_coord.cpu().detach().numpy()
+        
+#         # find all wps whose hm-notation align with sym
+#         closes = []   
+#         for wp, binary in wp_to_binary.items():
+#             if np.sum(np.equal(binary, sym)) == sym.shape[-1]: 
+#                 for orbit_index in range(len(wp.ops)):
+#                     close = search_cloest_wp(Group(spacegroup), wp, wp.ops[orbit_index], frac_coord)%1.
+#                     closes.append((close, wp, orbit_index, np.linalg.norm(np.minimum((close - frac_coord)%1., (frac_coord - close)%1.))))
+#         try:
+#             # pick the nearest wp to project
+#             closest = sorted(closes, key=lambda x: x[-1])[0]
+#             wyckoff = closest[1]
+#             repr_index = closest[2]
+            
+#             # use wp operations on frac_coord
+#             frac_coord = closest[0]
+#             for index in range(len(wyckoff)): 
+#                 # new_frac_coords.append(wyckoff[index].operate(frac_coord)%1.)
+#                 new_frac_coords.append(wyckoff[(index + repr_index) % len(wyckoff)].operate(frac_coord)%1.)
+#                 new_atom_types.append(atm_type.cpu().detach().numpy())
+#                 new_site_symm.append(sym)
+#         except:
+#             # print('Weird things happen, and I did not predict correctly')
+#             new_frac_coords.append(frac_coord)
+#             new_atom_types.append(atm_type.cpu().detach().numpy())
+#             new_site_symm.append(sym)
+        
+#     new_frac_coords = np.stack(new_frac_coords)
+#     new_atom_types = np.stack(new_atom_types)
+#     new_site_symm = np.stack(new_site_symm)
+#     return new_frac_coords, len(new_frac_coords), new_atom_types, new_site_symm
 
 def modify_frac_coords(traj:Dict, spacegroups:List[int], num_repr:List[int]) -> Dict:
     device = traj['frac_coords'].device
@@ -426,11 +464,11 @@ def modify_frac_coords(traj:Dict, spacegroups:List[int], num_repr:List[int]) -> 
                     traj['atom_types'][total_atoms:total_atoms+num_repr[index]], # num_repr x 100
                     spacegroups[index], 
                 )
-        
-            updated_frac_coords.append(new_frac_coords)
-            updated_num_atoms.append(new_num_atoms)
-            updated_atom_types.append(new_atom_types)
-            updated_site_symm.append(new_site_sym)
+            if new_num_atoms:
+                updated_frac_coords.append(new_frac_coords)
+                updated_num_atoms.append(new_num_atoms)
+                updated_atom_types.append(new_atom_types)
+                updated_site_symm.append(new_site_sym)
         
         total_atoms += num_repr[index]
     
@@ -496,7 +534,7 @@ class CSPDiffusion(BaseModule):
         self.sigma_scheduler = hydra.utils.instantiate(self.hparams.sigma_scheduler)
         self.time_dim = self.hparams.time_dim
         self.time_embedding = SinusoidalTimeEmbeddings(self.time_dim)
-        self.spacegroup_embedding = build_mlp(in_dim=73, hidden_dim=128, fc_num_layers=2, out_dim=self.time_dim)
+        self.spacegroup_embedding = build_mlp(in_dim=N_SPACEGROUPS, hidden_dim=128, fc_num_layers=2, out_dim=self.time_dim)
         self.keep_lattice = self.hparams.cost_lattice < 1e-5
         self.keep_coords = self.hparams.cost_coord < 1e-5
         self.use_ks = self.hparams.use_ks
@@ -506,14 +544,36 @@ class CSPDiffusion(BaseModule):
     def forward(self, batch):
 
         batch_size = batch.num_graphs
-        dummy_repr_ind = batch.dummy_repr_ind
         
+        # replicate during the training 
+        # if self.training:
+        #     spacegroup = batch.spacegroup.repeat_interleave(batch.num_atoms)
+        #     site_symm = batch.site_symm
+            
+        #     affine_matrices = []
+        #     for sg, symm, orbit_size in zip(spacegroup, site_symm, batch.x_loss_coeff): 
+        #         affine_matrix = spacegroup_ops_mapper[sg.item()][tuple(symm.cpu().detach().numpy())]
+        #         affine_matrices.append(affine_matrix)
+        #         assert orbit_size.item() == affine_matrix.shape[0], breakpoint()
+        #     affine_matrices = torch.cat(affine_matrices, dim=0).to(self.device)
+                
+        #     # repeating the frac coords as per size of orbits
+        #     frac_coords = torch.repeat_interleave(batch.frac_coords, batch.x_loss_coeff.squeeze(), dim=0)
+            
+        #     assert frac_coords.shape[0] == affine_matrices.shape[0], breakpoint()
+            
+        #     frac_coords_homogeneous = torch.cat((frac_coords, torch.ones(frac_coords.shape[0], 1).to(self.device)), dim=1)
+        #     frac_coords_homogeneous = frac_coords_homogeneous.unsqueeze(-1)
+        #     transformed_coords = torch.bmm(affine_matrices, frac_coords_homogeneous)
+        #     frac_coords = transformed_coords[:, :3, 0]
+           
+        # get diffusion timestep embeddings, concatenated with spacegroup condition    
+        gt_spacegroup_onehot = F.one_hot(batch.spacegroup - 1, num_classes=N_SPACEGROUPS).float()
         times = self.beta_scheduler.uniform_sample_t(batch_size, self.device)
-        time_emb = self.time_embedding(times) + self.spacegroup_embedding(batch.sg_condition.reshape(-1, 73))
+        time_emb = self.time_embedding(times) + self.spacegroup_embedding(gt_spacegroup_onehot)
 
+        # get diffusion coefficients for site symmetry, lattice, and atom types diffusion
         alphas_cumprod = self.beta_scheduler.alphas_cumprod[times]
-
-
         c0 = torch.sqrt(alphas_cumprod)
         c1 = torch.sqrt(1. - alphas_cumprod)
         c0_lattice = c0[:, self.beta_scheduler.LATTICE]
@@ -523,6 +583,7 @@ class CSPDiffusion(BaseModule):
         c0_site_symm = c0[:, self.beta_scheduler.SITE_SYMM]
         c1_site_symm = c1[:, self.beta_scheduler.SITE_SYMM]
 
+        # get coefficients for coordinate diffusion
         sigmas = self.sigma_scheduler.sigmas[times]
         sigmas_norm = self.sigma_scheduler.sigmas_norm[times]
         
@@ -552,13 +613,15 @@ class CSPDiffusion(BaseModule):
         input_frac_coords = (frac_coords + sigmas_per_atom * rand_x) % 1.
 
         gt_atom_types_onehot = F.one_hot(batch.atom_types - 1, num_classes=MAX_ATOMIC_NUM).float()
-        gt_site_symm_binary = batch.site_symm
+        gt_site_symm_binary = F.one_hot(batch.wyckoff_labels, num_classes=186).float()
 
         rand_t = torch.randn_like(gt_atom_types_onehot)
         rand_symm = torch.randn_like(gt_site_symm_binary)
 
         atom_type_probs = (c0_atom.repeat_interleave(batch.num_atoms)[:, None] * gt_atom_types_onehot + c1_atom.repeat_interleave(batch.num_atoms)[:, None] * rand_t)
         site_symm_probs = (c0_site_symm.repeat_interleave(batch.num_atoms)[:, None] * gt_site_symm_binary + c1_site_symm.repeat_interleave(batch.num_atoms)[:, None] * rand_symm)
+        site_symm_mask = sg_to_wyckoff_mask(batch.spacegroup.repeat_interleave(batch.num_atoms)).to(self.device)
+        site_symm_probs = site_symm_mask * site_symm_probs
 
         if self.keep_coords:
             input_frac_coords = frac_coords
@@ -578,14 +641,11 @@ class CSPDiffusion(BaseModule):
         
         loss_lattice = F.mse_loss(pred_lattice, ks_mask * rand_ks) if self.use_ks else F.mse_loss(pred_lattice, rand_l)
 
-        # loss_coord = F.mse_loss(pred_x * (1 - dummy_repr_ind), tar_x * (1 - dummy_repr_ind))
         loss_coord = torch.mean(torch.sqrt(batch.x_loss_coeff) * F.mse_loss(pred_x, tar_x, reduction='none'))
         
         loss_type = F.mse_loss(pred_t, rand_t)
-        
-        # loss_symm = F.mse_loss(pred_symm * (1 - dummy_repr_ind), rand_symm * (1 - dummy_repr_ind))
-        loss_symm = F.mse_loss(pred_symm, rand_symm)
-    
+
+        loss_symm = F.mse_loss(pred_symm, site_symm_mask * rand_symm)
 
         loss = (
             self.hparams.cost_lattice * loss_lattice +
@@ -618,7 +678,10 @@ class CSPDiffusion(BaseModule):
             k_T = torch.zeros([batch_size, 6]).to(self.device) # not used
         x_T = torch.rand([batch.num_nodes, 3]).to(self.device)
         t_T = torch.randn([batch.num_nodes, MAX_ATOMIC_NUM]).to(self.device)
-        symm_T = torch.randn([batch.num_nodes, 27]).to(self.device)
+        
+        symm_T = torch.randn([batch.num_nodes, 186]).to(self.device)
+        site_symm_mask = sg_to_wyckoff_mask(batch.spacegroup.repeat_interleave(batch.num_atoms)).to(self.device)
+        symm_T = site_symm_mask * symm_T
 
         if self.keep_coords:
             x_T = batch.frac_coords
@@ -641,7 +704,9 @@ class CSPDiffusion(BaseModule):
 
             times = torch.full((batch_size, ), t, device = self.device)
 
-            time_emb = self.time_embedding(times) + self.spacegroup_embedding(batch.sg_condition.reshape(-1, 73))
+            # get diffusion timestep embeddings, concatenated with spacegroup condition    
+            gt_spacegroup_onehot = F.one_hot(batch.spacegroup - 1, num_classes=N_SPACEGROUPS).float()
+            time_emb = self.time_embedding(times) + self.spacegroup_embedding(gt_spacegroup_onehot)
             
             alphas = self.beta_scheduler.alphas[t]
             alphas_cumprod = self.beta_scheduler.alphas_cumprod[t]
@@ -737,6 +802,7 @@ class CSPDiffusion(BaseModule):
             t_t_minus_1 = c0_atom * (t_t_minus_05 - c1_atom * pred_t) + sigmas[self.beta_scheduler.ATOM] * rand_t
 
             symm_t_minus_1 = c0_site_symm * (symm_t_minus_05 - c1_site_symm * pred_symm) + sigmas[self.beta_scheduler.SITE_SYMM] * rand_symm
+            symm_t_minus_1 = site_symm_mask * symm_t_minus_1
 
             traj[t - 1] = {
                 'num_atoms' : batch.num_atoms,
@@ -780,8 +846,8 @@ class CSPDiffusion(BaseModule):
         traj[0] = modify_frac_coords(traj[0], batch.spacegroup, traj[0]['num_atoms'])
         
         # sanity checks for size of tensors
-        assert traj[0]['frac_coords'].size(0) == traj[0]['atom_types'].size(0) == traj[0]['num_atoms'].sum()
-        assert traj[0]['ks'].size(0) == traj[0]['lattices'].size(0) == traj[0]['num_atoms'].size(0)
+        assert traj[0]['frac_coords'].size(0) == traj[0]['atom_types'].size(0) == traj[0]['num_atoms'].sum(), breakpoint()
+        assert traj[0]['ks'].size(0) == traj[0]['lattices'].size(0) == traj[0]['num_atoms'].size(0), breakpoint()
 
         return traj[0], traj_stack
 

@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import List
 import sys
-sys.path.append('/workspace/mila-top/crystal_diff/intel-mat-diffusion/')
+sys.path.append('.')
 import hydra
 import numpy as np
 import torch, os
