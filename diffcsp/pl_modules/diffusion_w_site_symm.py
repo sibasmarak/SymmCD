@@ -367,7 +367,7 @@ def modify_frac_coords_one(frac_coords, site_symm, atom_types, spacegroup):
     spacegroup = Group(spacegroup.item())
     
     # convert the site_symm from one-hot to categorical
-    int_wyckoff_labels = torch.argmax(site_symm, dim=-1)
+    int_wyckoff_labels = torch.where(site_symm != 0, site_symm, torch.tensor(float('-inf'))).argmax(dim=1)
 
     # get the string labels for wyckoff positions
     pred_wp_labels = wyckoff_category_to_labels([int_label.item() for int_label in int_wyckoff_labels])
@@ -824,7 +824,7 @@ class CSPDiffusion(BaseModule):
             'all_spacegroup': torch.stack([traj[i]['spacegroup'] for i in range(self.beta_scheduler.timesteps, -1, -1)]),
         }
 
-        
+
         # drop all dummy elements (atom types = MAX_ATOMIC_NUM)
         # NOTE: add breakpoint() here if you want to check (traj[0]['atom_types'].sum(dim=1) can give you sum of atom types values)
         dummy_ind = (traj[0]['atom_types'].argmax(dim=-1) + 1 == MAX_ATOMIC_NUM).long()

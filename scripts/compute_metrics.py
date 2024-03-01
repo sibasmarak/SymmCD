@@ -6,7 +6,7 @@ import json
 import numpy as np
 from pathlib import Path
 from tqdm import tqdm
-from p_tqdm import p_map
+from p_tqdm import p_map, p_umap
 from scipy.stats import wasserstein_distance
 import pandas as pd
 
@@ -68,6 +68,15 @@ class Crystal(object):
         self.atom_types = crys_array_dict['atom_types']
         self.lengths = crys_array_dict['lengths']
         self.angles = crys_array_dict['angles']
+        
+        # check for NaN values 
+        if np.isnan(self.lengths).any() or np.isinf(self.lengths).any():
+            self.lengths = np.array([1, 1, 1]) * 100
+            crys_array_dict['lengths'] = self.lengths
+            
+            self.constructed = False
+            self.invalid_reason = 'nan_value'
+        
         self.dict = crys_array_dict
         if len(self.atom_types.shape) > 1:
             # this implies the distribution over atom_types is passed instead of the atom_types
@@ -406,7 +415,7 @@ def main(args):
 
         gen_file_path = get_file_paths(args.root_path, 'gen', args.label)
         crys_array_list, _ = get_crystal_array_list(gen_file_path, batch_idx = -2)
-        gen_crys = p_map(lambda x: Crystal(x), crys_array_list)
+        gen_crys = p_umap(lambda x: Crystal(x), crys_array_list)
         if args.gt_file != '':
             csv = pd.read_csv(args.gt_file)
             gt_crys = p_map(get_gt_crys_ori, csv['cif'])
