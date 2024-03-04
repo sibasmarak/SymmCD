@@ -133,7 +133,22 @@ class Crystal(object):
             self.invalid_reason = 'non_positive_lattice'
         if np.isnan(self.lengths).any() or np.isnan(self.angles).any() or  np.isnan(self.frac_coords).any():
             self.constructed = False
-            self.invalid_reason = 'nan_value'            
+            self.invalid_reason = 'nan_value'
+        elif np.isinf(self.lengths).any() or np.isinf(self.angles).any() or  np.isinf(self.frac_coords).any():
+            self.constructed = False
+            self.invalid_reason = 'inf_value'
+        elif (self.lengths > 1000).any():
+            self.constructed = False
+            self.invalid_reason = 'bad_value'
+        elif (self.angles >= 180).any() or (self.angles <= 0).any():
+            self.constructed = False
+            self.invalid_reason = 'bad_value'
+        elif (self.frac_coords > 1).any() or (self.frac_coords < 0).any():
+            self.constructed = False
+            self.invalid_reason = 'bad_value'
+        elif self.lengths.min() < 1:
+            self.constructed = False
+            self.invalid_reason = 'bad_value'
         else:
             try:
                 self.structure = Structure(
