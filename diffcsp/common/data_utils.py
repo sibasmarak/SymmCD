@@ -1,3 +1,4 @@
+from collections import defaultdict
 import numpy as np
 import pandas as pd
 import networkx as nx
@@ -279,9 +280,10 @@ component_string_to_binary_repr = {
     "6/m":  torch.tensor([1, 0, 0, 0, 0, 0, 1, 0, 1]),
 }
 
-binary_repr_to_component_string = {
+binary_repr_to_component_string = defaultdict(lambda: ".")
+binary_repr_to_component_string.update({
     "".join([str(x) for x in value.tolist()]): key for key, value in component_string_to_binary_repr.items()
-}
+})
 
 def get_site_symmetry_binary_repr(symbol:str, spacegroup_number:int):
     """Get the binary representation of the site symmetry."""
@@ -533,7 +535,7 @@ def compose(sequence):
     """
     # check if only "." is present in the sequence
     if all([s == "." for s in sequence]): return "."
-    return "".join(sequence)
+    return "".join([seq for seq in sequence if seq != "."])
 
 def get_wyckoff_symbol_from_binary_repr(binary_repr:torch.tensor, spacegroup_number:int):
     binary_repr = binary_repr.reshape(13, 9).cpu().detach()
@@ -550,14 +552,18 @@ def get_wyckoff_symbol_from_binary_repr(binary_repr:torch.tensor, spacegroup_num
     if spacegroup_number >= 1 and spacegroup_number <= 74: # Triclinic, monoclinic, orthorhombic
         # low symmetry type: positions in symbol refer to x,y,z axes respectively
         symbol = component_strings[0] + component_strings[1] + component_strings[2]
+        if symbol == "...": symbol = "1"
         
     elif spacegroup_number >= 75 and spacegroup_number <= 194: # Trigonal, Hexagonal, Tetragonal
         # medium symmetry type: positions in symbol refer to z, (x|y), (face-diagonals) axes respectively
         symbol = component_strings[2] + " " + compose(component_strings[0:1]) + " " + compose(component_strings[3:9])
+        if symbol == ". . .": symbol = "1"
+        
         
     elif spacegroup_number >= 195 and spacegroup_number <= 230: # Cubic
         # high symmetry type: positions in symbol refer to (x|y|z), (face-diagonals), (body-diagonals) axes respectively
         symbol = compose(component_strings[0:3]) + " " + compose(component_strings[9:13]) + " " + compose(component_strings[3:9])
+        if symbol == ". . .": symbol = "1"
         
 
     return symbol

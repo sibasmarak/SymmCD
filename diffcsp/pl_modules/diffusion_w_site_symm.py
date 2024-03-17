@@ -372,24 +372,35 @@ def modify_frac_coords_one(frac_coords, site_symm, atom_types, spacegroup):
     # get the string labels for wyckoff positions
     # pred_wp_labels = wyckoff_category_to_labels([int_label.item() for int_label in int_wyckoff_labels])
     ###################################################
-    
-    pred_wp_labels = wyckoff_category_to_labels([get_wyckoff_symbol_from_binary_repr(binary_repr, spacegroup.number) for binary_repr in site_symm])
-    actual_spg_labels = [w.get_label() for w in spacegroup.Wyckoff_positions]
-    if not set(pred_wp_labels).issubset(set(actual_spg_labels)):
-        # check if the predicted set of wyckoff position belongs to the spacegroup
-        hydra.utils.log.warning("Doesn't satisfy the spacegroup symmetry")
-        print(f'Predicted: {pred_wp_labels}, Actual: {actual_spg_labels}, Spacegroup: {spacegroup.number}')
-        return None, 0, None, None
+    pred_wp_labels = [get_wyckoff_symbol_from_binary_repr(binary_repr, spacegroup.number) for binary_repr in (torch.abs(1 - site_symm) < 0.1).int()]
+    actual_spg_labels = []
+    for w in spacegroup.Wyckoff_positions:
+        w.get_site_symmetry()
+        actual_spg_labels.append(w.site_symm)
+        
+    # if not set(pred_wp_labels).issubset(set(actual_spg_labels)):
+    #     # check if the predicted set of wyckoff position belongs to the spacegroup
+    #     hydra.utils.log.warning("Doesn't satisfy the spacegroup symmetry")
+    #     print(f'Predicted: {set(pred_wp_labels)}, Actual: {set(actual_spg_labels)}, Spacegroup: {spacegroup.number}')
+    #     return None, 0, None, None
     
     new_frac_coords, new_atom_types, new_site_symm = [], [], []
     # iterate over frac coords and corresponding site-symm
     for (pred_wp_label, sym, frac_coord, atm_type) in zip(pred_wp_labels, site_symm, frac_coords, atom_types):
         
         # get the wyckoff position based on the predicted site symmetry
-        wp = spacegroup.get_wyckoff_position(pred_wp_label)
+        wyckoff_positions = [spacegroup.get_wyckoff_position(id) for id in [i for i in range(len(actual_spg_labels)) if actual_spg_labels[i] == pred_wp_label]]
+        
+        if len(wyckoff_positions) == 0:
+            wyckoff_positions = [spacegroup.get_wyckoff_position(0)]
+            
+        closes = []
+        frac_coord = frac_coord.cpu().detach().numpy()
+        for wp in wyckoff_positions:
+            close = search_cloest_wp(spacegroup, wp, wp.ops[0], frac_coord)%1.
+            closes.append((close, wp, 0, np.linalg.norm(np.minimum((close - frac_coord)%1., (frac_coord - close)%1.))))
         
         # use wp operations on frac_coord
-        frac_coord = frac_coord.cpu().detach().numpy()
         frac_coord = search_cloest_wp(spacegroup, wp, wp.ops[0], frac_coord)%1.
         for index in range(len(wp)):
             new_frac_coords.append(wp[index].operate(frac_coord)%1.)
