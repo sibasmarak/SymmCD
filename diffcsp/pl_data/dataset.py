@@ -113,7 +113,7 @@ class CrystDataset(Dataset):
             data.number_repsentatives = torch.LongTensor([num_atoms]) # torch.LongTensor([data_dict['number_representatives']])
 
             data.sg_condition = torch.Tensor(data_dict['sg_binary'])
-            data.site_symm = torch.Tensor(data_dict['site_symm_binary'])[mask.astype(bool)]
+            data.site_symm = torch.Tensor(data_dict['site_symm_binary'].float())[mask.astype(bool)]
             
             data.dummy_repr_ind = torch.Tensor([data_dict['dummy_repr_ind']]).reshape(-1, 1)
             

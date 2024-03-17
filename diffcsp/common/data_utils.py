@@ -234,16 +234,206 @@ def get_all_wyckoff_labels():
     
     return sorted(wyckoff_labels)
 
-def get_site_symmetry_binary_repr(notation:str, label:str = None):
+def split_string_by_list(big_string, string_list):
+    """
+    Splits a big string into substrings based on occurrences of strings in a given list.
+    The function searches for the longest possible matches first.
+
+    Args:
+    big_string (str): The string to be split.
+    string_list (list): A list of strings to split the big string by (assumed to be sorted by length).
+
+    Returns:
+    list: A list of substrings from the big string split by the strings in string_list.
+    """
+
+    # Initialize variables
+    substrings = []
+    index = 0
+    
+    assert " " not in big_string, "big_string should not contain any space character"
+    # Loop through the big string
+    while index < len(big_string):
+        for s in string_list:
+            # If the substring is found, add it to the result and move the index
+            if big_string[index:].startswith(s):
+                substrings.append(s)
+                index += len(s)
+                break
+            
+    return substrings
+
+component_string_to_binary_repr = {
+    ".":    torch.tensor([1, 0, 1, 0, 0, 0, 0, 1, 0]),
+    "2":    torch.tensor([1, 0, 0, 1, 0, 0, 0, 1, 0]),
+    "m":    torch.tensor([1, 0, 1, 0, 0, 0, 0, 0, 1]),
+    "-2":   torch.tensor([0, 1, 0, 1, 0, 0, 0, 1, 0]),
+    "2/m":  torch.tensor([1, 0, 0, 1, 0, 0, 0, 0, 1]),
+    "3":    torch.tensor([1, 0, 0, 0, 1, 0, 0, 1, 0]),
+    "4":    torch.tensor([1, 0, 0, 0, 0, 1, 0, 1, 0]),
+    "-4":   torch.tensor([0, 1, 0, 0, 0, 1, 0, 1, 0]),
+    "4/m":  torch.tensor([1, 0, 0, 0, 0, 1, 0, 0, 1]),
+    "-3":   torch.tensor([0, 1, 0, 0, 1, 0, 0, 1, 0]),
+    "6":    torch.tensor([1, 0, 0, 0, 0, 0, 1, 1, 0]),
+    "-6":   torch.tensor([0, 1, 0, 0, 0, 0, 1, 1, 0]),
+    "6/m":  torch.tensor([1, 0, 0, 0, 0, 0, 1, 0, 1]),
+}
+
+binary_repr_to_component_string = {
+    "".join([str(x) for x in value.tolist()]): key for key, value in component_string_to_binary_repr.items()
+}
+
+def get_site_symmetry_binary_repr(symbol:str, spacegroup_number:int):
     """Get the binary representation of the site symmetry."""
 
+    trivial_symmetry_axis_binary_repr = torch.tensor([1, 0, 1, 0, 0, 0, 0, 1, 0]) # "." (i.e., no inversion, no mirror plane)
+    possible_component_strings = ["2/m", "4/m", "6/m", "-2", "-4", "-3", "-6", ".", "2", "m", "3", "4", "6"]
+     
+    # follow PyXtal's steps to determine the HM notation
+    # there could be at most 13 symmetry axes: x, y, z, 6 face diagonals, 4 body diagonals
+    # the list of symbols: ".", "2", "m", "-2", "2/m", "3", "4", "-4", "4/m", "-3", "6", "-6", "6/m"
+    
+    
+    if spacegroup_number >= 1 and spacegroup_number <= 74: # Triclinic, monoclinic, orthorhombic
+        # low symmetry type: positions in symbol refer to x,y,z axes respectively
+        assert " " not in symbol, "Low symmetry type should only contain x,y,z symmetry axes"
+        
+        # check if it is -1 or 1, this indicates the generated symbol was "..."
+        if symbol in ["-1", "1"]:
+            trivial_binary_repr = torch.tensor([1, 0, 1, 0, 0, 0, 0, 1, 0]) if symbol == "1" else torch.tensor([0, 1, 1, 0, 0, 0, 0, 1, 0])
+            return trivial_binary_repr.repeat(13, 1).reshape(-1, 1).squeeze(1)
+        
+        # non trivial binary repr
+        split_symbol = split_string_by_list(symbol, possible_component_strings)
+        assert len(split_symbol) == 3, "Low symmetry type must contain x,y,z symmetry axes"
+        
+        binary_repr = trivial_symmetry_axis_binary_repr.repeat(13, 1)
+        for index, component_string in enumerate(split_symbol): 
+            binary_repr[index] = component_string_to_binary_repr[component_string]
+            
+    
+    
+    
+    
+    
+    
+    
+    elif spacegroup_number >= 75 and spacegroup_number <= 194: # Trigonal, Hexagonal, Tetragonal
+        # medium symmetry type: positions in symbol refer to z, (x|y), (face-diagonals) axes respectively
+
+        # check if it is -1 or 1, this indicates the generated symbol was "..."
+        if symbol in ["-1", "1"]:
+            trivial_binary_repr = torch.tensor([1, 0, 1, 0, 0, 0, 0, 1, 0])
+            if symbol == "-1": trivial_binary_repr = torch.tensor([0, 1, 1, 0, 0, 0, 0, 1, 0])
+            return trivial_binary_repr.repeat(13, 1).reshape(-1, 1).squeeze(1)
+        
+        axes_wise_symbols = symbol.split(" ")
+        assert len(axes_wise_symbols) == 3, "Medium symmetry type must contain z, (x|y), (face-diagonals) symmetry axes"
+        
+        binary_repr = trivial_symmetry_axis_binary_repr.repeat(13, 1)
+        for axis_index, axis_wise_symbol in enumerate(axes_wise_symbols):
+            if axis_index == 0:
+                # z axis
+                binary_repr[2] = component_string_to_binary_repr[axis_wise_symbol]
+                
+            elif axis_index == 1:
+                # (x|y) axis 
+                
+                # need to split the axis_wise_symbol
+                split_symbol = split_string_by_list(axis_wise_symbol, possible_component_strings)
+                assert 0 < len(split_symbol) <= 2, "Medium symmetry type's secondary notation must contain (x|y) symmetry axes"
+                
+                for split_index, component_string in enumerate(split_symbol):
+                    binary_repr[split_index] = component_string_to_binary_repr[component_string]
+                    
+                for remaining_index in range(2 - len(split_symbol)):
+                    # ASSUMPTION: only x-axis had the highest symmetry, y-axis had a lesser symmetry (we assume it is trivial symmetry)
+                    binary_repr[len(split_symbol) + remaining_index] = component_string_to_binary_repr["."]
+            
+            elif axis_index == 2:
+                # need to split the axis_wise_symbol
+                split_symbol = split_string_by_list(axis_wise_symbol, possible_component_strings)
+                assert 0 < len(split_symbol) <= 6, "Medium symmetry type's tertiary notation must contain face diagonals"
+                
+                for split_index, component_string in enumerate(split_symbol):
+                    binary_repr[3 + split_index] = component_string_to_binary_repr[component_string]
+                    
+                for remaining_index in range(6 - len(split_symbol)):
+                    # ASSUMPTION: 3,4... face diagonals had the highest symmetry, ...7,8 had a lesser symmetry (we assume it is trivial symmetry)
+                    binary_repr[3 + len(split_symbol) + remaining_index] = component_string_to_binary_repr["."]
+
+
+
+
+
+
+
+    elif spacegroup_number >= 195 and spacegroup_number <= 230: # Cubic
+        # high symmetry type: positions in symbol refer to (x|y|z), (face-diagonals), (body-diagonals) axes respectively
+        
+        # check if it is -1 or 1, this indicates the generated symbol was "..."
+        if symbol in ["-1", "1"]:
+            trivial_binary_repr = torch.tensor([1, 0, 1, 0, 0, 0, 0, 1, 0])
+            if symbol == "-1": trivial_binary_repr = torch.tensor([0, 1, 1, 0, 0, 0, 0, 1, 0])
+            return trivial_binary_repr.repeat(13, 1).reshape(-1, 1).squeeze(1)
+        
+        axes_wise_symbols = symbol.split(" ")
+        assert len(axes_wise_symbols) == 3, "High symmetry type must contain z, (x|y), (face-diagonals) symmetry axes"
+        
+        binary_repr = trivial_symmetry_axis_binary_repr.repeat(13, 1)
+        for axis_index, axis_wise_symbol in enumerate(axes_wise_symbols):
+            if axis_index == 0:
+                # (x|y|z) axis
+                
+                # need to split the axis_wise_symbol
+                split_symbol = split_string_by_list(axis_wise_symbol, possible_component_strings)
+                assert 0 < len(split_symbol) <= 3, "High symmetry type's primary notation must contain (x|y|z) symmetry axes"
+                
+                for split_index, component_string in enumerate(split_symbol):
+                    binary_repr[split_index] = component_string_to_binary_repr[component_string]
+                    
+                for remaining_index in range(3 - len(split_symbol)):
+                    # ASSUMPTION: x,y... had the highest symmetry, ...y,z had a lesser symmetry (we assume it is trivial symmetry)
+                    binary_repr[len(split_symbol) + remaining_index] = component_string_to_binary_repr["."]
+            
+                
+            elif axis_index == 1:
+                # body-diagonal axes
+                
+                # need to split the axis_wise_symbol
+                split_symbol = split_string_by_list(axis_wise_symbol, possible_component_strings)
+                assert 0 < len(split_symbol) <= 4, "Medium symmetry type's secondary notation must contain (x|y) symmetry axes"
+                
+                for split_index, component_string in enumerate(split_symbol):
+                    # split_index could be 0 or 1
+                    binary_repr[9 + split_index] = component_string_to_binary_repr[component_string]
+                    
+                for remaining_index in range(4 - len(split_symbol)):
+                    # ASSUMPTION: 9,10,... face diagonals had the highest symmetry, ...11,12 had a lesser symmetry (we assume it is trivial symmetry)
+                    binary_repr[9 + len(split_symbol) + remaining_index] = component_string_to_binary_repr["."]
+            
+            elif axis_index == 2:
+                # need to split the axis_wise_symbol
+                split_symbol = split_string_by_list(axis_wise_symbol, possible_component_strings)
+                assert 0 < len(split_symbol) <= 6, "Medium symmetry type's tertiary notation must contain face diagonals"
+                
+                for split_index, component_string in enumerate(split_symbol):
+                    # split_index could be 0 or 1
+                    binary_repr[3 + split_index] = component_string_to_binary_repr[component_string]
+                    
+                for remaining_index in range(6 - len(split_symbol)):
+                    # ASSUMPTION: 3,4... face diagonals had the highest symmetry, ...7,8 had a lesser symmetry (we assume it is trivial symmetry)
+                    binary_repr[3 + len(split_symbol) + remaining_index] = component_string_to_binary_repr["."]
+
+
+    return binary_repr.reshape(-1, 1).squeeze(1)
+
+def get_spacegroup_binary_repr(symbol:str):
     # split with respect to the ' ' character
     lattice_type = None
-    if not label: 
-        notation = notation.split(' ')
-        lattice_type = LATTICE_MAPPER[notation[0]]
-        notation = notation[1:]
-    else: notation = notation.split(' ')
+    notation = symbol.split(" ")
+    lattice_type = LATTICE_MAPPER[notation[0]]
+    notation = notation[1:]
 
     if len(notation) < 3:
         # add '1' to the notation to make it length 3
@@ -257,7 +447,6 @@ def get_site_symmetry_binary_repr(notation:str, label:str = None):
         reflection = 0
         inversion = 0
         glide = 0
-
 
         # string processing
         if '-' in axis_symm: inversion = True # inversion
@@ -320,32 +509,59 @@ def get_site_symmetry_binary_repr(notation:str, label:str = None):
 
         # fill the binary representation in one-hot fashion
         # binary_repr = [0, 1, 1, 2, 3, 4, 6, 0, 1, 0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5, 6] # [inversion (2), rotation (5), reflection (2), translation (6), glide (7)]
-        if not label:
-            # for spacegroup, we need translation and glide
-            binary_repr = torch.zeros(22)
-            binary_repr[0 + inversion] = 1
-            if rotation <= 4: binary_repr[1 + rotation] = 1
-            elif rotation == 6: binary_repr[6] = 1
-            binary_repr[7 + reflection] = 1
-            binary_repr[9 + translation] = 1
-            binary_repr[15 + glide] = 1
-        else:
-            # for site symmetry, we do not need translation and glide (since they are point groups)
-            binary_repr = torch.zeros(9)
-            binary_repr[0 + inversion] = 1
-            if rotation <= 4: binary_repr[1 + rotation] = 1
-            elif rotation == 6: binary_repr[6] = 1
-            binary_repr[7 + reflection] = 1
+        
+        # for spacegroup, we need translation and glide
+        binary_repr = torch.zeros(22)
+        binary_repr[0 + inversion] = 1
+        if rotation <= 4: binary_repr[1 + rotation] = 1
+        elif rotation == 6: binary_repr[6] = 1
+        binary_repr[7 + reflection] = 1
+        binary_repr[9 + translation] = 1
+        binary_repr[15 + glide] = 1
+
 
         axis_wise_binary_repr.append(binary_repr)
 
-    if lattice_type is not None:
-        # for spacegroup HM notations, total length of binary repr becomes 7 + 66 = 73
-        lattice_type_repr = torch.zeros(7)
-        lattice_type_repr[lattice_type] = 1
-        return torch.cat([lattice_type_repr, *(axis_wise_binary_repr)], dim=0)
+    # for spacegroup HM notations, total length of binary repr becomes 7 + 66 = 73
+    lattice_type_repr = torch.zeros(7)
+    lattice_type_repr[lattice_type] = 1
+    return torch.cat([lattice_type_repr, *(axis_wise_binary_repr)], dim=0)
 
-    return torch.cat(axis_wise_binary_repr, dim=0)
+def compose(sequence):
+    """
+    Compose a sequence of strings into a single string.
+    """
+    # check if only "." is present in the sequence
+    if all([s == "." for s in sequence]): return "."
+    return "".join(sequence)
+
+def get_wyckoff_symbol_from_binary_repr(binary_repr:torch.tensor, spacegroup_number:int):
+    binary_repr = binary_repr.reshape(13, 9).cpu().detach()
+    
+    # check for 1 or -1
+    trivial_binary_repr = torch.tensor([1, 0, 1, 0, 0, 0, 0, 1, 0])
+    if trivial_binary_repr.repeat(13, 1).reshape(-1, 1).equal(binary_repr): return "1"
+    trivial_binary_repr = torch.tensor([0, 1, 1, 0, 0, 0, 0, 1, 0])
+    if trivial_binary_repr.repeat(13, 1).reshape(-1, 1).equal(binary_repr): return "-1"
+    
+    # non trivial strings
+    component_strings = [binary_repr_to_component_string["".join([str(x) for x in binary_repr[i].tolist()])] for i in range(13)]
+    
+    if spacegroup_number >= 1 and spacegroup_number <= 74: # Triclinic, monoclinic, orthorhombic
+        # low symmetry type: positions in symbol refer to x,y,z axes respectively
+        symbol = component_strings[0] + component_strings[1] + component_strings[2]
+        
+    elif spacegroup_number >= 75 and spacegroup_number <= 194: # Trigonal, Hexagonal, Tetragonal
+        # medium symmetry type: positions in symbol refer to z, (x|y), (face-diagonals) axes respectively
+        symbol = component_strings[2] + " " + compose(component_strings[0:1]) + " " + compose(component_strings[3:9])
+        
+    elif spacegroup_number >= 195 and spacegroup_number <= 230: # Cubic
+        # high symmetry type: positions in symbol refer to (x|y|z), (face-diagonals), (body-diagonals) axes respectively
+        symbol = compose(component_strings[0:3]) + " " + compose(component_strings[9:13]) + " " + compose(component_strings[3:9])
+        
+
+    return symbol
+
 
 
 def get_symmetry_info(crystal, tol=0.01, num_repr=10, use_random_repr=False):
@@ -386,7 +602,8 @@ def get_symmetry_info(crystal, tol=0.01, num_repr=10, use_random_repr=False):
             identifier.append(id)
     
             site.wp.get_site_symmetry() # initialize the wyckoff position
-            hmwyckoffs.append(cluster_sites[site.wp.site_symm]) # HM notation of wyckoff position
+            # hmwyckoffs.append(cluster_sites[site.wp.site_symm]) # HM notation of wyckoff position
+            hmwyckoffs.append(site.wp.site_symm) # HM notation of wyckoff position
             labels.append(site.wp.get_label()) # label of wyckoff position (1a, 3a, etc.)
 
     gt_num_coords = len(coords)
@@ -1438,8 +1655,8 @@ def process_one(row, niggli, primitive, graph_method, prop_list, use_space_group
         result_dict.update(sym_info)
 
         # obtain the HM binary representation for space group and site symmetries
-        sg_repr = get_site_symmetry_binary_repr(sym_info['hmnotation'])
-        site_repr = [get_site_symmetry_binary_repr(hmnot, label=lbl) for hmnot, lbl in zip(sym_info['hmwyckoffs'], sym_info['labels'])]
+        sg_repr = get_spacegroup_binary_repr(sym_info['hmnotation'])
+        site_repr = [get_site_symmetry_binary_repr(hmnot, sym_info["spacegroup"]) for hmnot in sym_info['hmwyckoffs']]
         result_dict['sg_binary'] = sg_repr
         result_dict['identifier'] = identifier
         result_dict['site_symm_binary'] = torch.stack(site_repr)

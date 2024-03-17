@@ -37,7 +37,7 @@ from smact.screening import pauling_test
 from diffcsp.common.utils import PROJECT_ROOT
 from diffcsp.common.data_utils import (
     lattice_params_to_matrix_torch, lattice_ks_to_matrix_torch, wyckoff_category_to_labels, 
-    sg_to_wyckoff_mask, sg_to_ks_mask, mask_ks, N_SPACEGROUPS, chemical_symbols)
+    sg_to_wyckoff_mask, sg_to_ks_mask, mask_ks, N_SPACEGROUPS, chemical_symbols, get_wyckoff_symbol_from_binary_repr, get_site_symmetry_binary_repr)
 
 from diffcsp.pl_modules.diff_utils import d_log_p_wrapped_normal
 from diffcsp.pl_modules.model import build_mlp
@@ -366,15 +366,19 @@ def modify_frac_coords_one(frac_coords, site_symm, atom_types, spacegroup):
 
     spacegroup = Group(spacegroup.item())
     
+    ##################### OLD CODE #####################
     # convert the site_symm from one-hot to categorical
-    int_wyckoff_labels = torch.where(site_symm != 0, site_symm, torch.tensor(float('-inf'))).argmax(dim=1)
-
+    # int_wyckoff_labels = torch.where(site_symm != 0, site_symm, torch.tensor(float('-inf'))).argmax(dim=1)
     # get the string labels for wyckoff positions
-    pred_wp_labels = wyckoff_category_to_labels([int_label.item() for int_label in int_wyckoff_labels])
+    # pred_wp_labels = wyckoff_category_to_labels([int_label.item() for int_label in int_wyckoff_labels])
+    ###################################################
+    
+    pred_wp_labels = wyckoff_category_to_labels([get_wyckoff_symbol_from_binary_repr(binary_repr, spacegroup.number) for binary_repr in site_symm])
     actual_spg_labels = [w.get_label() for w in spacegroup.Wyckoff_positions]
     if not set(pred_wp_labels).issubset(set(actual_spg_labels)):
         # check if the predicted set of wyckoff position belongs to the spacegroup
         hydra.utils.log.warning("Doesn't satisfy the spacegroup symmetry")
+        print(f'Predicted: {pred_wp_labels}, Actual: {actual_spg_labels}, Spacegroup: {spacegroup.number}')
         return None, 0, None, None
     
     new_frac_coords, new_atom_types, new_site_symm = [], [], []
@@ -534,7 +538,7 @@ class CSPDiffusion(BaseModule):
         self.sigma_scheduler = hydra.utils.instantiate(self.hparams.sigma_scheduler)
         self.time_dim = self.hparams.time_dim
         self.time_embedding = SinusoidalTimeEmbeddings(self.time_dim)
-        self.spacegroup_embedding = build_mlp(in_dim=N_SPACEGROUPS, hidden_dim=128, fc_num_layers=2, out_dim=self.time_dim)
+        self.spacegroup_embedding = build_mlp(in_dim=73, hidden_dim=128, fc_num_layers=2, out_dim=self.time_dim)
         self.keep_lattice = self.hparams.cost_lattice < 1e-5
         self.keep_coords = self.hparams.cost_coord < 1e-5
         self.use_ks = self.hparams.use_ks
@@ -568,9 +572,9 @@ class CSPDiffusion(BaseModule):
         #     frac_coords = transformed_coords[:, :3, 0]
            
         # get diffusion timestep embeddings, concatenated with spacegroup condition    
-        gt_spacegroup_onehot = F.one_hot(batch.spacegroup - 1, num_classes=N_SPACEGROUPS).float()
+        # gt_spacegroup_onehot = F.one_hot(batch.spacegroup - 1, num_classes=N_SPACEGROUPS).float()
         times = self.beta_scheduler.uniform_sample_t(batch_size, self.device)
-        time_emb = self.time_embedding(times) + self.spacegroup_embedding(gt_spacegroup_onehot)
+        time_emb = self.time_embedding(times) + self.spacegroup_embedding(batch.sg_condition.reshape(-1, 73))
 
         # get diffusion coefficients for site symmetry, lattice, and atom types diffusion
         alphas_cumprod = self.beta_scheduler.alphas_cumprod[times]
@@ -613,15 +617,16 @@ class CSPDiffusion(BaseModule):
         input_frac_coords = (frac_coords + sigmas_per_atom * rand_x) % 1.
 
         gt_atom_types_onehot = F.one_hot(batch.atom_types - 1, num_classes=MAX_ATOMIC_NUM).float()
-        gt_site_symm_binary = F.one_hot(batch.wyckoff_labels, num_classes=186).float()
+        gt_site_symm_binary = batch.site_symm # F.one_hot(batch.wyckoff_labels, num_classes=186).float()
 
         rand_t = torch.randn_like(gt_atom_types_onehot)
         rand_symm = torch.randn_like(gt_site_symm_binary)
 
         atom_type_probs = (c0_atom.repeat_interleave(batch.num_atoms)[:, None] * gt_atom_types_onehot + c1_atom.repeat_interleave(batch.num_atoms)[:, None] * rand_t)
         site_symm_probs = (c0_site_symm.repeat_interleave(batch.num_atoms)[:, None] * gt_site_symm_binary + c1_site_symm.repeat_interleave(batch.num_atoms)[:, None] * rand_symm)
-        site_symm_mask = sg_to_wyckoff_mask(batch.spacegroup.repeat_interleave(batch.num_atoms)).to(self.device)
-        site_symm_probs = site_symm_mask * site_symm_probs
+        
+        # site_symm_mask = sg_to_wyckoff_mask(batch.spacegroup.repeat_interleave(batch.num_atoms)).to(self.device)
+        # site_symm_probs = site_symm_mask * site_symm_probs
 
         if self.keep_coords:
             input_frac_coords = frac_coords
@@ -645,7 +650,8 @@ class CSPDiffusion(BaseModule):
         
         loss_type = F.mse_loss(pred_t, rand_t)
 
-        loss_symm = F.mse_loss(pred_symm, site_symm_mask * rand_symm)
+        # loss_symm = F.mse_loss(pred_symm, site_symm_mask * rand_symm)
+        loss_symm = F.mse_loss(pred_symm, rand_symm)
 
         loss = (
             self.hparams.cost_lattice * loss_lattice +
@@ -679,9 +685,10 @@ class CSPDiffusion(BaseModule):
         x_T = torch.rand([batch.num_nodes, 3]).to(self.device)
         t_T = torch.randn([batch.num_nodes, MAX_ATOMIC_NUM]).to(self.device)
         
-        symm_T = torch.randn([batch.num_nodes, 186]).to(self.device)
-        site_symm_mask = sg_to_wyckoff_mask(batch.spacegroup.repeat_interleave(batch.num_atoms)).to(self.device)
-        symm_T = site_symm_mask * symm_T
+        symm_T = torch.randn([batch.num_nodes, 117]).to(self.device)
+        # symm_T = torch.randn([batch.num_nodes, 186]).to(self.device)
+        # site_symm_mask = sg_to_wyckoff_mask(batch.spacegroup.repeat_interleave(batch.num_atoms)).to(self.device)
+        # symm_T = site_symm_mask * symm_T
 
         if self.keep_coords:
             x_T = batch.frac_coords
@@ -705,8 +712,8 @@ class CSPDiffusion(BaseModule):
             times = torch.full((batch_size, ), t, device = self.device)
 
             # get diffusion timestep embeddings, concatenated with spacegroup condition    
-            gt_spacegroup_onehot = F.one_hot(batch.spacegroup - 1, num_classes=N_SPACEGROUPS).float()
-            time_emb = self.time_embedding(times) + self.spacegroup_embedding(gt_spacegroup_onehot)
+            # gt_spacegroup_onehot = F.one_hot(batch.spacegroup - 1, num_classes=N_SPACEGROUPS).float()
+            time_emb = self.time_embedding(times) + self.spacegroup_embedding(batch.sg_condition.reshape(-1, 73))
             
             alphas = self.beta_scheduler.alphas[t]
             alphas_cumprod = self.beta_scheduler.alphas_cumprod[t]
@@ -802,7 +809,7 @@ class CSPDiffusion(BaseModule):
             t_t_minus_1 = c0_atom * (t_t_minus_05 - c1_atom * pred_t) + sigmas[self.beta_scheduler.ATOM] * rand_t
 
             symm_t_minus_1 = c0_site_symm * (symm_t_minus_05 - c1_site_symm * pred_symm) + sigmas[self.beta_scheduler.SITE_SYMM] * rand_symm
-            symm_t_minus_1 = site_symm_mask * symm_t_minus_1
+            # symm_t_minus_1 = site_symm_mask * symm_t_minus_1
 
             traj[t - 1] = {
                 'num_atoms' : batch.num_atoms,

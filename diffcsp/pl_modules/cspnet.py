@@ -135,7 +135,7 @@ class CSPNet(nn.Module):
             self.node_embedding = nn.Linear(max_atoms, hidden_dim)
         else:
             self.node_embedding = nn.Embedding(max_atoms, hidden_dim)
-        self.site_symm_embedding = nn.Linear(186, latent_dim)
+        self.site_symm_embedding = nn.Linear(117, latent_dim)
         site_symm_dim = latent_dim if self.use_site_symm else 0
         lattice_dim = 9 if self.ip else 6
         frac_coord_dim = 3 if self.use_gt_frac_coords else 0
@@ -172,8 +172,7 @@ class CSPNet(nn.Module):
         if self.pred_type:
             self.type_out = nn.Linear(hidden_dim, max_atoms)
         if self.pred_site_symm_type:
-            self.site_symm_in = nn.Linear(186, hidden_dim) 
-            self.site_symm_out = nn.Linear(hidden_dim, 186)
+            self.site_symm_out = nn.Linear(hidden_dim, 117)
 
     def select_symmetric_edges(self, tensor, mask, reorder_idx, inverse_neg):
         # Mask out counter-edges
@@ -323,13 +322,13 @@ class CSPNet(nn.Module):
         if self.pred_type and self.pred_site_symm_type:
             type_out = self.type_out(node_features)
             site_symm_out = self.site_symm_out(node_features)
-            return lattice_out, coord_out, type_out, site_symm_out.reshape(-1, 186)
+            return lattice_out, coord_out, type_out, site_symm_out.reshape(-1, 117)
         if self.pred_type and not self.pred_site_symm_type:
             type_out = self.type_out(node_features)
             return lattice_out, coord_out, type_out
         if not self.pred_type and self.pred_site_symm_type:
             site_symm_out = self.site_symm_out(node_features)
-            return lattice_out, coord_out, site_symm_out.reshape(-1, 186)
+            return lattice_out, coord_out, site_symm_out.reshape(-1, 117)
 
         return lattice_out, coord_out
 
