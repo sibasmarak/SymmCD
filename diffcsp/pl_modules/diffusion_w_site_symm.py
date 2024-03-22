@@ -336,7 +336,7 @@ def find_num_atoms(dummy_ind, total_num_atoms):
 
 def split_argmax_sitesymm(site_symm:torch.Tensor) -> np.ndarray:
     # site_symm : num_repr x 27
-    site_symm = torch.sigmoid(site_symm).reshape(-1, 3, 9)
+    site_symm = torch.sigmoid(site_symm).reshape(-1, 13, 9)
     # Initialize the result tensor with zeros
     result = torch.zeros_like(site_symm, dtype=torch.int64)
 
@@ -354,7 +354,7 @@ def split_argmax_sitesymm(site_symm:torch.Tensor) -> np.ndarray:
     result[batch_range, row_range, argmax2.unsqueeze(-1)] = 1
     result[batch_range, row_range, argmax3.unsqueeze(-1)] = 1
 
-    return result.cpu().detach().numpy().reshape(-1, 27)
+    return result.reshape(-1, 117)
 
 
 def modify_frac_coords_one(frac_coords, site_symm, atom_types, spacegroup):
@@ -372,17 +372,17 @@ def modify_frac_coords_one(frac_coords, site_symm, atom_types, spacegroup):
     # get the string labels for wyckoff positions
     # pred_wp_labels = wyckoff_category_to_labels([int_label.item() for int_label in int_wyckoff_labels])
     ###################################################
-    pred_wp_labels = [get_wyckoff_symbol_from_binary_repr(binary_repr, spacegroup.number) for binary_repr in (torch.abs(1 - site_symm) < 0.1).int()]
+    pred_wp_labels = [get_wyckoff_symbol_from_binary_repr(binary_repr, spacegroup.number) for binary_repr in split_argmax_sitesymm(site_symm)] #(torch.abs(1 - site_symm) < 0.1).int()]
     actual_spg_labels = []
     for w in spacegroup.Wyckoff_positions:
         w.get_site_symmetry()
         actual_spg_labels.append(w.site_symm)
         
-    # if not set(pred_wp_labels).issubset(set(actual_spg_labels)):
-    #     # check if the predicted set of wyckoff position belongs to the spacegroup
-    #     hydra.utils.log.warning("Doesn't satisfy the spacegroup symmetry")
-    #     print(f'Predicted: {set(pred_wp_labels)}, Actual: {set(actual_spg_labels)}, Spacegroup: {spacegroup.number}')
-    #     return None, 0, None, None
+    if not set(pred_wp_labels).issubset(set(actual_spg_labels)):
+        # check if the predicted set of wyckoff position belongs to the spacegroup
+        hydra.utils.log.warning("Doesn't satisfy the spacegroup symmetry")
+        print(f'Predicted: {set(pred_wp_labels)}, Actual: {set(actual_spg_labels)}, Spacegroup: {spacegroup.number} Num atoms: {len(atom_types)}')
+        # return None, 0, None, None
     
     new_frac_coords, new_atom_types, new_site_symm = [], [], []
     # iterate over frac coords and corresponding site-symm

@@ -281,9 +281,10 @@ component_string_to_binary_repr = {
 }
 
 binary_repr_to_component_string = defaultdict(lambda: ".")
-binary_repr_to_component_string.update({
+binary_repr_to_component_string = {
     "".join([str(x) for x in value.tolist()]): key for key, value in component_string_to_binary_repr.items()
-})
+}
+binary_repr_to_component_string["100010001"] = "-6"
 
 def get_site_symmetry_binary_repr(symbol:str, spacegroup_number:int):
     """Get the binary representation of the site symmetry."""

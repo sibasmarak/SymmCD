@@ -137,8 +137,29 @@ class SampleDataset(Dataset):
         for i in range(self.additional_test_len):
             sg_counter[self.additional_test[i]['spacegroup']] += 1
             sg_number_binary_mapper[self.additional_test[i]['spacegroup']] = self.additional_test[i]['sg_binary']
-            num_atoms = self.additional_test[i]['graph_arrays'][-1]
-            self.sg_num_atoms[self.additional_test[i]['spacegroup']][num_atoms] += 1
+            # num_atoms = self.additional_test[i]['graph_arrays'][-1]
+            
+            data_dict = self.additional_test[i]
+            (frac_coords, atom_types, lengths, angles, ks, edge_indices,
+            to_jimages, num_atoms) = data_dict['graph_arrays']
+            spacegroup = data_dict['spacegroup']
+            # masking on the basis of identifiers of orbits in a crystal
+            identifiers = data_dict['identifier']
+            # find a single representative for each identifier which can then mask
+            mask = np.zeros_like(identifiers)
+
+            # Process each unique identifier
+            for identifier in np.unique(identifiers):
+                # Find indices where this identifier occurs
+                indices = np.where(identifiers == identifier)[0]
+                # Randomly select one index and set it to 1 in the mask tensor
+                mask[indices[0]] = 1
+
+            frac_coords = frac_coords[mask.astype(bool)]
+            atom_types = atom_types[mask.astype(bool)]
+            num_atoms = len(frac_coords)
+            
+            self.sg_num_atoms[spacegroup][num_atoms] += 1
             
         # spacegroup distribution
         self.sg_dist = []
