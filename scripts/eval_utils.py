@@ -94,8 +94,12 @@ def load_model(model_path, load_data=False, testing=True):
             from diffcsp.pl_modules.diffusion_w_site_symm import CSPDiffusion as Model
         elif cfg.model._target_ == "diffcsp.pl_modules.diffusion_csp_w_site_symm.CSPDiffusion":
             from diffcsp.pl_modules.diffusion_csp_w_site_symm import CSPDiffusion as Model
+        elif cfg.model._target_ == "diffcsp.pl_modules.discrete_diffusion_w_site_symm.CSPDiffusion":
+            from diffcsp.pl_modules.discrete_diffusion_w_site_symm import CSPDiffusion as Model
         elif cfg.model._target_ == "diffcsp.pl_modules.model.CrystGNN_Supervise":
             from diffcsp.pl_modules.model import CrystGNN_Supervise as Model
+        else:
+            raise NotImplementedError
         model = Model.load_from_checkpoint(ckpt, strict=False)
         model.lattice_scaler = torch.load(model_path / 'lattice_scaler.pt')
         model.scaler = torch.load(model_path / 'prop_scaler.pt')
