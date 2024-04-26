@@ -128,10 +128,16 @@ class Crystal(object):
 
 
     def get_structure(self):
-        if min(self.lengths.tolist()) < 0:
+        if len(self.frac_coords) > 30:
+            self.constructed = False
+            self.invalid_reason = 'too_many_atoms'
+        if len(self.atom_types) == 0:
+            self.constructed = False
+            self.invalid_reason = 'empty'
+        elif min(self.lengths.tolist()) < 0:
             self.constructed = False
             self.invalid_reason = 'non_positive_lattice'
-        if np.isnan(self.lengths).any() or np.isnan(self.angles).any() or  np.isnan(self.frac_coords).any():
+        elif np.isnan(self.lengths).any() or np.isnan(self.angles).any() or  np.isnan(self.frac_coords).any():
             self.constructed = False
             self.invalid_reason = 'nan_value'
         elif np.isinf(self.lengths).any() or np.isinf(self.angles).any() or  np.isinf(self.frac_coords).any():
@@ -165,6 +171,10 @@ class Crystal(object):
 
     def get_composition(self):
         elem_counter = Counter(self.atom_types)
+        if len(elem_counter) == 0:
+            self.elems = ()
+            self.comps = ()
+            return
         composition = [(elem, elem_counter[elem])
                        for elem in sorted(elem_counter.keys())]
         elems, counts = list(zip(*composition))
@@ -174,7 +184,10 @@ class Crystal(object):
         self.comps = tuple(counts.astype('int').tolist())
 
     def get_validity(self):
-        self.comp_valid = smact_validity(self.elems, self.comps)
+        if len(self.elems) == 0:
+            self.comp_valid = False
+        else:
+            self.comp_valid = smact_validity(self.elems, self.comps)
         if self.constructed:
             self.struct_valid = structure_validity(self.structure)
         else:
@@ -182,6 +195,9 @@ class Crystal(object):
         self.valid = self.comp_valid and self.struct_valid
 
     def get_fingerprints(self):
+        if len(self.atom_types) == 0:
+            self.struct_fp = None
+            return
         elem_counter = Counter(self.atom_types)
         comp = Composition(elem_counter)
         self.comp_fp = CompFP.featurize(comp)
@@ -353,7 +369,7 @@ class GenEval(object):
 
 
 def get_file_paths(root_path, task, label='', suffix='pt'):
-    if args.label == '':
+    if label == '':
         out_name = f'eval_{task}.{suffix}'
     else:
         out_name = f'eval_{task}_{label}.{suffix}'

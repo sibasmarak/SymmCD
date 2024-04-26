@@ -19,8 +19,8 @@ class CrystDataset(Dataset):
                  prop: ValueNode, niggli: ValueNode, primitive: ValueNode,
                  graph_method: ValueNode, preprocess_workers: ValueNode,
                  lattice_scale_method: ValueNode, save_path: ValueNode, tolerance: ValueNode, 
-                 use_space_group: ValueNode, use_pos_index: ValueNode, number_representatives: ValueNode, 
-                 use_random_representatives:ValueNode, **kwargs):
+                 use_space_group: ValueNode, use_pos_index: ValueNode, number_representatives: ValueNode=0, 
+                 use_random_representatives:ValueNode=False, lim=0, **kwargs):
         super().__init__()
         self.path = path
         self.name = name
@@ -36,13 +36,13 @@ class CrystDataset(Dataset):
         self.number_representatives = number_representatives
         self.use_random_representatives = use_random_representatives
 
-        self.preprocess(save_path, preprocess_workers, prop)
+        self.preprocess(save_path, preprocess_workers, prop, lim)
 
         add_scaled_lattice_prop(self.cached_data, lattice_scale_method)
         self.lattice_scaler = None
         self.scaler = None
 
-    def preprocess(self, save_path, preprocess_workers, prop):
+    def preprocess(self, save_path, preprocess_workers, prop, lim):
         if os.path.exists(save_path):
             self.cached_data = torch.load(save_path)
         else:
@@ -56,7 +56,8 @@ class CrystDataset(Dataset):
             use_space_group=self.use_space_group,
             tol=self.tolerance,
             num_repr=self.number_representatives,
-            use_random_repr=self.use_random_representatives)
+            use_random_repr=self.use_random_representatives,
+            lim=lim)
             torch.save(cached_data, save_path)
             self.cached_data = cached_data
 
@@ -110,7 +111,7 @@ class CrystDataset(Dataset):
             data.spacegroup = torch.LongTensor([data_dict['spacegroup']])
             data.ops = torch.Tensor(data_dict['wyckoff_ops'])
             data.anchor_index = torch.LongTensor(data_dict['anchors'])
-            data.number_repsentatives = torch.LongTensor([num_atoms]) # torch.LongTensor([data_dict['number_representatives']])
+            data.number_representatives = torch.LongTensor([num_atoms]) # torch.LongTensor([data_dict['number_representatives']])
 
             data.sg_condition = torch.Tensor(data_dict['sg_binary'])
             data.site_symm = torch.Tensor(data_dict['site_symm_binary'].float())[mask.astype(bool)]
@@ -118,6 +119,7 @@ class CrystDataset(Dataset):
             data.dummy_repr_ind = torch.Tensor([data_dict['dummy_repr_ind']]).reshape(-1, 1)
             
             # compute position loss coefficient (basically, the multiplicity of each orbit)
+            # TODO: make this adjustable
             identifiers_torch = torch.tensor(data_dict['identifier'])
             changes = torch.where(torch.diff(identifiers_torch) != 0)[0] + 1
             changes = torch.cat((torch.tensor([0]), changes, torch.tensor([len(identifiers_torch)])))

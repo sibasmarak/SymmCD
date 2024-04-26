@@ -15,6 +15,7 @@ from diffcsp.pl_modules.model import build_mlp
 from torch_geometric.nn.conv.transformer_conv import TransformerConv
 
 MAX_ATOMIC_NUM=100
+SITE_SYMM_DIM=15*13
 
 class SinusoidsEmbedding(nn.Module):
     def __init__(self, n_frequencies = 10, n_space = 3):
@@ -83,7 +84,7 @@ class CSPLayer(nn.Module):
         return edge_features
 
     def node_model(self, node_features, edge_features, edge_index):
-        # torch.use_deterministic_algorithms(False) # NOTE: see if this is necessary later
+        torch.use_deterministic_algorithms(False) # NOTE: see if this is necessary later
         agg = scatter(edge_features, edge_index[0], dim = 0, reduce='mean', dim_size=node_features.shape[0])
         agg = torch.cat([node_features, agg], dim = 1)
         out = self.node_mlp(agg)
@@ -135,7 +136,7 @@ class CSPNet(nn.Module):
             self.node_embedding = nn.Linear(max_atoms, hidden_dim)
         else:
             self.node_embedding = nn.Embedding(max_atoms, hidden_dim)
-        self.site_symm_embedding = nn.Linear(117, latent_dim)
+        self.site_symm_embedding = nn.Linear(SITE_SYMM_DIM, latent_dim)
         site_symm_dim = latent_dim if self.use_site_symm else 0
         lattice_dim = 9 if self.ip else 6
         frac_coord_dim = 3 if self.use_gt_frac_coords else 0
@@ -172,7 +173,7 @@ class CSPNet(nn.Module):
         if self.pred_type:
             self.type_out = nn.Linear(hidden_dim, max_atoms)
         if self.pred_site_symm_type:
-            self.site_symm_out = nn.Linear(hidden_dim, 117)
+            self.site_symm_out = nn.Linear(hidden_dim, SITE_SYMM_DIM)
 
     def select_symmetric_edges(self, tensor, mask, reorder_idx, inverse_neg):
         # Mask out counter-edges
@@ -322,13 +323,13 @@ class CSPNet(nn.Module):
         if self.pred_type and self.pred_site_symm_type:
             type_out = self.type_out(node_features)
             site_symm_out = self.site_symm_out(node_features)
-            return lattice_out, coord_out, type_out, site_symm_out.reshape(-1, 117)
+            return lattice_out, coord_out, type_out, site_symm_out.reshape(-1, SITE_SYMM_DIM)
         if self.pred_type and not self.pred_site_symm_type:
             type_out = self.type_out(node_features)
             return lattice_out, coord_out, type_out
         if not self.pred_type and self.pred_site_symm_type:
             site_symm_out = self.site_symm_out(node_features)
-            return lattice_out, coord_out, site_symm_out.reshape(-1, 117)
+            return lattice_out, coord_out, site_symm_out.reshape(-1, SITE_SYMM_DIM)
 
         return lattice_out, coord_out
 

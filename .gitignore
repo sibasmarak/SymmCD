@@ -170,4 +170,13 @@ wandb/
 
 dist.out
 alpha_cumprod.png
+cdvae
+hydra/singlerun/
+scripts/logs/
+.DS_Store
+
+*.output
+*.ckpt
+*.out
+logs/*
 batch_run_eval.sh
