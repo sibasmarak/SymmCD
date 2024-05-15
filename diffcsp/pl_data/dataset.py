@@ -9,7 +9,7 @@ from torch_geometric.data import Data
 import pickle
 import numpy as np
 
-# import symd
+import symd
 
 from diffcsp.common.utils import PROJECT_ROOT
 from diffcsp.common.data_utils import (
@@ -66,10 +66,10 @@ class CrystDataset(Dataset):
     def __len__(self) -> int:
         return len(self.cached_data)
 
-    # def get_asym_unit_position(self, positions, group):
-    #     in_unit = symd.asymm_constraints(group.asymm_unit)
-    #     mask_asym = [in_unit(*position) for position in positions]
-    #     return mask_asym
+    def get_asym_unit_position(self, positions, group):
+        in_unit = symd.asymm_constraints(group.asymm_unit)
+        mask_asym = [in_unit(*position) for position in positions]
+        return np.array(mask_asym)
 
     def __getitem__(self, index):
         data_dict = self.cached_data[index]
@@ -86,17 +86,19 @@ class CrystDataset(Dataset):
         # masking on the basis of identifiers of orbits in a crystal
         identifiers = data_dict['identifier']
         # find a single representative for each identifier which can then mask
-        mask = np.zeros_like(identifiers)
+        # mask = np.zeros_like(identifiers)
 
-        # Process each unique identifier
-        for identifier in np.unique(identifiers):
-            # Find indices where this identifier occurs
-            indices = np.where(identifiers == identifier)[0]
-            # Randomly select one index and set it to 1 in the mask tensor
-            mask[indices[0]] = 1
+        # # Process each unique identifier
+        # for identifier in np.unique(identifiers):
+        #     # Find indices where this identifier occurs
+        #     indices = np.where(identifiers == identifier)[0]
+        #     # Randomly select one index and set it to 1 in the mask tensor
+        #     mask[indices[0]] = 1
             
-        # mask = self.get_asym_unit_position(frac_coords,data_dict['spacegroup']) # Asymmetric unit mask
-            
+        # Asymmetric unit mask
+        mask = self.get_asym_unit_position(frac_coords, symd.load_group(data_dict['spacegroup'], dim=3))
+        assert len(mask) == len(identifiers), "Mask for asymmetric unit and identifiers should be of same length."
+
         frac_coords = frac_coords[mask.astype(bool)]
         atom_types = atom_types[mask.astype(bool)]
         num_atoms = len(frac_coords)
