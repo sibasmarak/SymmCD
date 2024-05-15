@@ -118,8 +118,6 @@ B_MATRICES[5, 0, 0] =  B_MATRICES[5, 1, 1]  = B_MATRICES[5, 2, 2]  = 1
 
 N_SPACEGROUPS = 230
 dirname = os.path.dirname(__file__)
-SG_WYCKOFF_MASK_MAPPER = torch.load(os.path.join(dirname, 'spacegroup_wyckoff_masks.pt'))
-ALL_WYCKOFFS = torch.load(os.path.join(dirname, 'wyckoff_labels.pt'))
 
 def lattice_from_ks(ks):
     ks = ks.reshape(6, 1, 1)
@@ -136,32 +134,6 @@ def lattice_to_ks(L):
     for i in range(6):
         ks[i] = frobenius_prod(S, B_MATRICES[i]) / frobenius_prod(B_MATRICES[i], B_MATRICES[i])
     return ks
-
-def sg_to_wyckoff_mask(sg):
-    """
-    sg is a batch of spacegroup numbers
-    this function returns the wyckoff mask for each spacegroup
-    """
-    
-    # use SG_WYCKOFF_MASK_MAPPER to obtain the wyckoff mask for each spacegroup
-    wyckoff_masks = [SG_WYCKOFF_MASK_MAPPER[s.item()] for s in sg]
-    return torch.stack(wyckoff_masks, dim=0)
-    
-def wyckoff_labels_to_category(string_wyckoff_labels):
-    """
-    wyckoff_labels is a sequence of (string) wyckoff labels
-    this function returns the corresponding category in the ALL_WYCKOFFS list
-    """
-
-    return [ALL_WYCKOFFS.index(string_label) for string_label in string_wyckoff_labels]
-
-def wyckoff_category_to_labels(int_wyckoff_labels):
-    """
-    wyckoff_labels is a sequence of (int) wyckoff labels
-    this function returns the corresponding string in the ALL_WYCKOFFS list
-    """
-
-    return [ALL_WYCKOFFS[int_label] for int_label in int_wyckoff_labels]
 
 def sg_to_ks_mask(sg):
     n_lattices = sg.shape[0]
@@ -239,104 +211,18 @@ def get_all_wyckoff_labels():
 N_AXES = 15
 N_SS = 13
 
-def get_spacegroup_binary_repr(symbol:str):
-    # split with respect to the ' ' character
-    lattice_type = None
-    notation = symbol.split(" ")
-    lattice_type = LATTICE_MAPPER[notation[0]]
-    notation = notation[1:]
-
-    if len(notation) < 3:
-        # add '1' to the notation to make it length 3
-        notation = notation + ['1'] * (3 - len(notation))
-
-    axis_wise_binary_repr = []
-    for axis_symm in notation:
-        # initialize the binary representation
-        translation = 0
-        rotation = 1
-        reflection = 0
-        inversion = 0
-        glide = 0
-
-        # string processing
-        if '-' in axis_symm: inversion = True # inversion
-        if 'm' in axis_symm: reflection = 1 # mirror plane
-
-        # screw axis
-        if '21' in axis_symm: 
-            rotation = 2
-            translation = 1
-        if '31' in axis_symm: 
-            rotation = 3
-            translation = 1
-        if '32' in axis_symm: 
-            rotation = 3
-            translation = 2
-        if '41' in axis_symm:
-            rotation = 4
-            translation = 1
-        if '42' in axis_symm:
-            rotation = 4
-            translation = 2
-        if '43' in axis_symm:
-            rotation = 4
-            translation = 3
-        if '61' in axis_symm:
-            rotation = 6
-            translation = 1
-        if '62' in axis_symm:
-            rotation = 6
-            translation = 2
-        if '63' in axis_symm:
-            rotation = 6
-            translation = 3
-        if '64' in axis_symm:
-            rotation = 6
-            translation = 4
-        if '65' in axis_symm:
-            rotation = 6
-            translation = 5
-
-        screw_axis = True if translation else False
-
-        # rotation axis
-        if not screw_axis:
-            if '2' in axis_symm: rotation = 2
-            if '3' in axis_symm: rotation = 3
-            if '4' in axis_symm: rotation = 4
-            if '6' in axis_symm: rotation = 6
-
-        # glide plane
-        if not reflection:
-            if 'a' in axis_symm: glide = 1
-            if 'b' in axis_symm: glide = 2
-            if 'c' in axis_symm: glide = 3
-            if 'n' in axis_symm: glide = 4
-            if 'd' in axis_symm: glide = 5
-            if 'e' in axis_symm: glide = 6
-            
-        if '/' in axis_symm: assert glide or reflection
-
-        # fill the binary representation in one-hot fashion
-        # binary_repr = [0, 1, 1, 2, 3, 4, 6, 0, 1, 0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5, 6] # [inversion (2), rotation (5), reflection (2), translation (6), glide (7)]
-        
-        # for spacegroup, we need translation and glide
-        binary_repr = torch.zeros(22)
-        binary_repr[0 + inversion] = 1
-        if rotation <= 4: binary_repr[1 + rotation] = 1
-        elif rotation == 6: binary_repr[6] = 1
-        binary_repr[7 + reflection] = 1
-        binary_repr[9 + translation] = 1
-        binary_repr[15 + glide] = 1
-
-
-        axis_wise_binary_repr.append(binary_repr)
-
-    # for spacegroup HM notations, total length of binary repr becomes 7 + 66 = 73
+def get_spacegroup_binary_repr(number:int):
+    spg = Group(number)
+    
+    # get the point group and translation representation of space group
+    ss = spg.get_spg_symmetry_object()
+    axis_wise_binary_repr = torch.from_numpy(ss.to_matrix_representation_spg().reshape(-1,))
+    
+    # join the bravais lattice type
+    lattice_type = LATTICE_MAPPER[spg.symbol[0]]
     lattice_type_repr = torch.zeros(7)
     lattice_type_repr[lattice_type] = 1
-    return torch.cat([lattice_type_repr, *(axis_wise_binary_repr)], dim=0)
+    return torch.cat([lattice_type_repr, axis_wise_binary_repr], dim=0)
 
 def compose(sequence):
     """
@@ -1445,7 +1331,7 @@ def process_one(row, niggli, primitive, graph_method, prop_list, use_space_group
         result_dict.update(sym_info)
 
         # obtain the HM binary representation for space group and site symmetries
-        sg_repr = get_spacegroup_binary_repr(sym_info['hmnotation'])
+        sg_repr = get_spacegroup_binary_repr(sym_info['spacegroup'])
         result_dict['sg_binary'] = sg_repr
         result_dict['identifier'] = identifier
         result_dict['site_symm_binary'] = torch.LongTensor(sym_info['site_symm_binarys'])

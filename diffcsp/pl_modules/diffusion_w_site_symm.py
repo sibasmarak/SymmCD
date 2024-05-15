@@ -21,8 +21,7 @@ from pyxtal.symmetry import search_cloest_wp, Group
 
 from diffcsp.common.utils import PROJECT_ROOT
 from diffcsp.common.data_utils import (
-    lattice_params_to_matrix_torch, lattice_ks_to_matrix_torch, wyckoff_category_to_labels, 
-    sg_to_wyckoff_mask, sg_to_ks_mask, mask_ks, N_SPACEGROUPS, chemical_symbols, )
+    lattice_params_to_matrix_torch, lattice_ks_to_matrix_torch, sg_to_ks_mask, mask_ks,)
 
 from diffcsp.pl_modules.diff_utils import d_log_p_wrapped_normal
 from diffcsp.pl_modules.model import build_mlp
