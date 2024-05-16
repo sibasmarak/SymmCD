@@ -85,20 +85,25 @@ class CrystDataset(Dataset):
 
         # masking on the basis of identifiers of orbits in a crystal
         identifiers = data_dict['identifier']
-        # find a single representative for each identifier which can then mask
-        # mask = np.zeros_like(identifiers)
-
-        # # Process each unique identifier
-        # for identifier in np.unique(identifiers):
-        #     # Find indices where this identifier occurs
-        #     indices = np.where(identifiers == identifier)[0]
-        #     # Randomly select one index and set it to 1 in the mask tensor
-        #     mask[indices[0]] = 1
-            
+       
         # Asymmetric unit mask
         mask = self.get_asym_unit_position(frac_coords, symd.load_group(data_dict['spacegroup'], dim=3))
-        assert len(mask) == len(identifiers), "Mask for asymmetric unit and identifiers should be of same length."
-
+        
+        # randomly keep one of the selected (mask value is 1) atoms
+        unique_identifiers = np.unique(identifiers)
+        if not sum(mask) == len(unique_identifiers):
+            for identifier in unique_identifiers:
+                if sum(mask[identifiers == identifier]) != 1:
+                    try:
+                        true_indices = np.where(mask[identifiers == identifier])[0]
+                        new_mask = np.zeros_like(mask[identifiers == identifier], dtype=bool)
+                        new_mask[random.choice(true_indices)] = True
+                        mask[identifiers == identifier] = new_mask
+                    except:
+                        new_mask = np.zeros_like(mask[identifiers == identifier], dtype=bool)
+                        new_mask[random.choice(np.arange(len(mask[identifiers == identifier])))] = True
+                        mask[identifiers == identifier] = new_mask
+        
         frac_coords = frac_coords[mask.astype(bool)]
         atom_types = atom_types[mask.astype(bool)]
         num_atoms = len(frac_coords)
@@ -130,7 +135,6 @@ class CrystDataset(Dataset):
             data.dummy_repr_ind = torch.Tensor([data_dict['dummy_repr_ind']]).reshape(-1, 1)
             
             # compute position loss coefficient (basically, the multiplicity of each orbit)
-            # TODO: make this adjustable
             identifiers_torch = torch.tensor(data_dict['identifier'])
             changes = torch.where(torch.diff(identifiers_torch) != 0)[0] + 1
             changes = torch.cat((torch.tensor([0]), changes, torch.tensor([len(identifiers_torch)])))
