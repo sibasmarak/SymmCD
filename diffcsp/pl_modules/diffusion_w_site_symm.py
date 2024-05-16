@@ -31,6 +31,7 @@ MAX_ATOMIC_NUM=101
 SITE_SYMM_AXES = 15
 SITE_SYMM_PGS = 13
 SITE_SYMM_DIM = SITE_SYMM_AXES * SITE_SYMM_PGS
+SG_CONDITION_DIM = 397
 
 def find_num_atoms(dummy_ind, total_num_atoms):
     # num_atoms states how many atoms are there in each crystal (num_repr + dummy origin)
@@ -53,29 +54,26 @@ def split_argmax_sitesymm(site_symm:torch.Tensor) -> np.ndarray:
 
 def modify_frac_coords_one(frac_coords, site_symm, atom_types, spacegroup):
     spacegroup = spacegroup.item()
-    
-    # Get argmax for each site symmetry axis 
-    site_symm_argmax = split_argmax_sitesymm(site_symm)
-    
-    # mapping from binary representation to hm-notation
-    wp_to_axis_argmax = dict()
+    site_symm_axis = site_symm.reshape(-1, SITE_SYMM_AXES, SITE_SYMM_PGS).detach().cpu()
+    # Get site symmetry of each WP for the spacegroup
+    wp_to_site_symm = dict()
     for wp in Group(spacegroup).Wyckoff_positions:
         wp.get_site_symmetry()
-        wp_to_axis_argmax[wp] = str(wp.get_site_symmetry_object().to_one_hot().argmax(-1))
-    # Reverse the dict to get a list of wp for each site symmetry
-    axis_argmax_to_wp = defaultdict(list)
-    for wp, wp_site_symm in wp_to_axis_argmax.items():
-        axis_argmax_to_wp[wp_site_symm].append(wp)
+        wp_to_site_symm[wp] = wp.get_site_symmetry_object().to_one_hot()
 
-     
     # iterate over frac coords and corresponding site-symm
     new_frac_coords, new_atom_types, new_site_symm = [], [], []
-    for (sym, frac_coord, atm_type) in zip(site_symm_argmax, frac_coords, atom_types):
+    for (sym, frac_coord, atm_type) in zip(site_symm_axis, frac_coords, atom_types):
         frac_coord = frac_coord.cpu().detach().numpy()
         
-        # find all wps whose hm-notation align with sym
+        # Get all WPs that are closest in terms of site symmetry
+        wp_to_ss_dist = {wp: torch.norm(sym.flatten() - ss.flatten()) for wp, ss in wp_to_site_symm.items()}
+        min_ss_dist = min(wp_to_ss_dist.values())
+        closest_ss_wps = [wp for wp, dist in wp_to_ss_dist.items() if dist==min_ss_dist]
+            
+        # For each WP find closest position in space
         closes = []
-        for wp in axis_argmax_to_wp[str(site_symm_argmax)]:
+        for wp in closest_ss_wps:
             for orbit_index in range(len(wp.ops)):
                 close = search_cloest_wp(Group(spacegroup), wp, wp.ops[orbit_index], frac_coord)%1.
                 closes.append((close, wp, orbit_index, np.linalg.norm(np.minimum((close - frac_coord)%1., (frac_coord - close)%1.))))
@@ -191,11 +189,28 @@ class CSPDiffusion(BaseModule):
         self.sigma_scheduler = hydra.utils.instantiate(self.hparams.sigma_scheduler)
         self.time_dim = self.hparams.time_dim
         self.time_embedding = SinusoidalTimeEmbeddings(self.time_dim)
-        self.spacegroup_embedding = build_mlp(in_dim=73, hidden_dim=128, fc_num_layers=2, out_dim=self.time_dim)
+        self.spacegroup_embedding = build_mlp(in_dim=SG_CONDITION_DIM, hidden_dim=128, fc_num_layers=2, out_dim=self.time_dim)
         self.keep_lattice = self.hparams.cost_lattice < 1e-5
         self.keep_coords = self.hparams.cost_coord < 1e-5
         self.use_ks = self.hparams.use_ks
+        self.mask_ss = self.hparams.mask_ss
+        if self.mask_ss:
+            self.group_ss_mask = self.init_group_ss_mask()
 
+    def init_group_ss_mask(self):
+        sg_to_group_ss_mask = np.zeros((231, SITE_SYMM_AXES, SITE_SYMM_PGS))
+        for spacegroup_number in range(1, 231):
+            group = Group(spacegroup_number)
+            group_mask = None
+            for wp in group.Wyckoff_positions:
+                wp.get_site_symmetry()
+                site_symm_binary = wp.get_site_symmetry_object().to_one_hot()
+                if group_mask is None:
+                    group_mask = site_symm_binary
+                else:
+                    group_mask = group_mask + site_symm_binary
+            sg_to_group_ss_mask[spacegroup_number] = group_mask == 0
+        return torch.tensor(sg_to_group_ss_mask)
 
 
     def forward(self, batch):
@@ -227,7 +242,7 @@ class CSPDiffusion(BaseModule):
         # get diffusion timestep embeddings, concatenated with spacegroup condition    
         # gt_spacegroup_onehot = F.one_hot(batch.spacegroup - 1, num_classes=N_SPACEGROUPS).float()
         times = self.beta_scheduler.uniform_sample_t(batch_size, self.device)
-        time_emb = self.time_embedding(times) + self.spacegroup_embedding(batch.sg_condition.reshape(-1, 73))
+        time_emb = self.time_embedding(times) + self.spacegroup_embedding(batch.sg_condition.reshape(-1, SG_CONDITION_DIM))
 
         # get diffusion coefficients for site symmetry, lattice, and atom types diffusion
         alphas_cumprod = self.beta_scheduler.alphas_cumprod[times]
@@ -303,8 +318,11 @@ class CSPDiffusion(BaseModule):
         
         loss_type = F.mse_loss(pred_t, rand_t)
 
-        # loss_symm = F.mse_loss(pred_symm, site_symm_mask * rand_symm)
-        loss_symm = F.mse_loss(pred_symm, rand_symm)
+        if self.mask_ss:
+            batch_ss_mask = self.group_ss_mask[torch.repeat_interleave(batch.spacegroup, batch.num_atoms)].flatten(1, 2).to(pred_symm.device)
+            loss_symm = F.mse_loss(batch_ss_mask * pred_symm, batch_ss_mask * rand_symm)
+        else:
+            loss_symm = F.mse_loss(pred_symm, rand_symm)
 
         loss = (
             self.hparams.cost_lattice * loss_lattice +
@@ -366,7 +384,7 @@ class CSPDiffusion(BaseModule):
 
             # get diffusion timestep embeddings, concatenated with spacegroup condition    
             # gt_spacegroup_onehot = F.one_hot(batch.spacegroup - 1, num_classes=N_SPACEGROUPS).float()
-            time_emb = self.time_embedding(times) + self.spacegroup_embedding(batch.sg_condition.reshape(-1, 73))
+            time_emb = self.time_embedding(times) + self.spacegroup_embedding(batch.sg_condition.reshape(-1, SG_CONDITION_DIM))
             
             alphas = self.beta_scheduler.alphas[t]
             alphas_cumprod = self.beta_scheduler.alphas_cumprod[t]
