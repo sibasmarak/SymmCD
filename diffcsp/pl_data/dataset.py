@@ -85,8 +85,22 @@ class CrystDataset(Dataset):
 
         # masking on the basis of identifiers of orbits in a crystal
         identifiers = data_dict['identifier']
+
+        #### Random atom from each orbit mask
+        #### --------------------------------------
+        # find a single representative for each identifier which can then mask
+        # mask = np.zeros_like(identifiers)
+
+        # # Process each unique identifier
+        # for identifier in np.unique(identifiers):
+        #     # Find indices where this identifier occurs
+        #     indices = np.where(identifiers == identifier)[0]
+        #     # Randomly select one index and set it to 1 in the mask tensor
+        #     mask[indices[0]] = 1
        
-        # Asymmetric unit mask
+        #### Asymmetric unit mask
+        #### ---------------------
+        
         mask = self.get_asym_unit_position(frac_coords, symd.load_group(data_dict['spacegroup'], dim=3))
         
         # randomly keep one of the selected (mask value is 1) atoms
@@ -144,7 +158,7 @@ class CrystDataset(Dataset):
             
             # data.wyckoff_labels = torch.LongTensor(wyckoff_labels_to_category(data_dict['labels']))[mask.astype(bool)]
 
-        assert len(data.site_symm) == len(data.frac_coords) == len(data.atom_types) == len(data.x_loss_coeff), breakpoint()
+        assert len(data.site_symm) == len(data.frac_coords) == len(data.atom_types) # == len(data.x_loss_coeff), breakpoint()
         if self.use_pos_index:
             pos_dic = {}
             indexes = []

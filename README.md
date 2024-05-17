@@ -1,8 +1,18 @@
 # DiffCSP
 
 ## Setup
+
+#### Recommended installation method
+It is recommended to install each necessary package (with appropriate versions mentioned in the `diffcsp39.yaml`) file following this order:  
+`pytorch`, `pytorch-lightning`, `pyg`, `pyxtal`, `pymatgen`, `matminer`, `einops`, `hydra-core`, `symd`.  
+Now run `diff_run.sh` if it throws some package error, please install those.
+
+
+#### Other installation method
+
+
 1. follow the instructions from [DiffCSP's .env setup](https://github.com/jiaor17/DiffCSP?tab=readme-ov-file#dependencies-and-setup) to setup/add `.env` file  
-2. create the anaconda environment with the `environment.yml` file (`conda env create -f environment.yml`: creates environment with name `diffcsp`)
+2. create the anaconda environment with the `diffcsp39.yml` file (`conda env create -f diffcsp39.yml`: creates environment with name `diffcsp39`)
 3. install `matminer` with `cd matminer && pip install -e .`   
 4. clone [`cdvae repo`](https://github.com/txie-93/cdvae) in the same directory level as `conf` and `data` and install it    
 5. if you execute `run_diff.sh`, it should work now  
@@ -20,7 +30,7 @@ DiffCSP (should now look like this, and the environment should contain cdvae and
 
 Implementation codes for Crystal Structure Prediction by Joint Equivariant Diffusion.
 
-### Dependencies
+### Old Dependencies
 
 ```
 python==3.8.13
@@ -46,7 +56,9 @@ For the Ab Initio Generation task
 python diffcsp/run.py data=<dataset> model=diffusion_w_type expname=<expname>
 ```
 
-The ``<dataset>`` tag can be selected from perov_5, mp_20, mpts_52 and carbon_24.
+The ``<dataset>`` tag can be selected from perov_5, mp_20, mpts_52 and carbon_24.  
+
+For multiple GPUs, please add `train.pl_trainer.devices=2` to above commands (ensure 2 gpus on machine where script launches).
 
 ### Evaluation
 
