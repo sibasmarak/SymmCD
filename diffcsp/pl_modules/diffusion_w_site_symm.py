@@ -210,7 +210,7 @@ class CSPDiffusion(BaseModule):
                 else:
                     group_mask = group_mask + site_symm_binary
             sg_to_group_ss_mask[spacegroup_number] = group_mask == 0
-        return torch.tensor(sg_to_group_ss_mask)
+        return torch.FloatTensor(sg_to_group_ss_mask)
 
 
     def forward(self, batch):
@@ -244,6 +244,8 @@ class CSPDiffusion(BaseModule):
         times = self.beta_scheduler.uniform_sample_t(batch_size, self.device)
         time_emb = self.time_embedding(times) + self.spacegroup_embedding(batch.sg_condition.reshape(-1, SG_CONDITION_DIM))
 
+        if self.mask_ss:
+            batch_ss_mask = self.group_ss_mask[torch.repeat_interleave(batch.spacegroup, batch.num_atoms)].flatten(1, 2).to(self.device)
         # get diffusion coefficients for site symmetry, lattice, and atom types diffusion
         alphas_cumprod = self.beta_scheduler.alphas_cumprod[times]
         c0 = torch.sqrt(alphas_cumprod)
@@ -292,9 +294,8 @@ class CSPDiffusion(BaseModule):
 
         atom_type_probs = (c0_atom.repeat_interleave(batch.num_atoms)[:, None] * gt_atom_types_onehot + c1_atom.repeat_interleave(batch.num_atoms)[:, None] * rand_t)
         site_symm_probs = (c0_site_symm.repeat_interleave(batch.num_atoms)[:, None] * gt_site_symm_binary + c1_site_symm.repeat_interleave(batch.num_atoms)[:, None] * rand_symm)
-        
-        # site_symm_mask = sg_to_wyckoff_mask(batch.spacegroup.repeat_interleave(batch.num_atoms)).to(self.device)
-        # site_symm_probs = site_symm_mask * site_symm_probs
+        if self.mask_ss:
+            site_symm_probs = batch_ss_mask * site_symm_probs
 
         if self.keep_coords:
             input_frac_coords = frac_coords
@@ -319,7 +320,6 @@ class CSPDiffusion(BaseModule):
         loss_type = F.mse_loss(pred_t, rand_t)
 
         if self.mask_ss:
-            batch_ss_mask = self.group_ss_mask[torch.repeat_interleave(batch.spacegroup, batch.num_atoms)].flatten(1, 2).to(pred_symm.device)
             loss_symm = F.mse_loss(batch_ss_mask * pred_symm, batch_ss_mask * rand_symm)
         else:
             loss_symm = F.mse_loss(pred_symm, rand_symm)
@@ -357,7 +357,9 @@ class CSPDiffusion(BaseModule):
         t_T = torch.randn([batch.num_nodes, MAX_ATOMIC_NUM]).to(self.device)
         
         symm_T = torch.randn([batch.num_nodes, SITE_SYMM_DIM]).to(self.device)
-        # symm_T = torch.randn([batch.num_nodes, 186]).to(self.device)
+        if self.mask_ss:
+            batch_ss_mask = self.group_ss_mask[torch.repeat_interleave(batch.spacegroup, batch.num_atoms)].flatten(1, 2).to(self.device)
+            symm_T = batch_ss_mask * symm_T
         # site_symm_mask = sg_to_wyckoff_mask(batch.spacegroup.repeat_interleave(batch.num_atoms)).to(self.device)
         # symm_T = site_symm_mask * symm_T
 
@@ -424,6 +426,8 @@ class CSPDiffusion(BaseModule):
                 rand_l = torch.randn_like(l_T) if t > 1 else torch.zeros_like(l_T)
             rand_t = torch.randn_like(t_T) if t > 1 else torch.zeros_like(t_T)
             rand_symm = torch.randn_like(symm_T) if t > 1 else torch.zeros_like(symm_T)
+            if self.mask_ss:
+                rand_symm = batch_ss_mask * rand_symm
             rand_x = torch.randn_like(x_T) if t > 1 else torch.zeros_like(x_T)
 
             step_size = step_lr * (sigma_x / self.sigma_scheduler.sigma_begin) ** 2
@@ -454,6 +458,8 @@ class CSPDiffusion(BaseModule):
 
             rand_t = torch.randn_like(t_T) if t > 1 else torch.zeros_like(t_T)
             rand_symm = torch.randn_like(symm_T) if t > 1 else torch.zeros_like(symm_T)
+            if self.mask_ss:
+                rand_symm = batch_ss_mask * rand_symm
             rand_x = torch.randn_like(x_T) if t > 1 else torch.zeros_like(x_T)
 
             adjacent_sigma_x = self.sigma_scheduler.sigmas[t-1] 
@@ -480,7 +486,8 @@ class CSPDiffusion(BaseModule):
             t_t_minus_1 = c0_atom * (t_t_minus_05 - c1_atom * pred_t) + sigmas[self.beta_scheduler.ATOM] * rand_t
 
             symm_t_minus_1 = c0_site_symm * (symm_t_minus_05 - c1_site_symm * pred_symm) + sigmas[self.beta_scheduler.SITE_SYMM] * rand_symm
-            # symm_t_minus_1 = site_symm_mask * symm_t_minus_1
+            if self.mask_ss:
+                symm_t_minus_1 = batch_ss_mask * symm_t_minus_1
 
             traj[t - 1] = {
                 'num_atoms' : batch.num_atoms,

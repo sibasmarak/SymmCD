@@ -89,35 +89,35 @@ class CrystDataset(Dataset):
         #### Random atom from each orbit mask
         #### --------------------------------------
         # find a single representative for each identifier which can then mask
-        # mask = np.zeros_like(identifiers)
+        mask = np.zeros_like(identifiers)
 
         # # Process each unique identifier
-        # for identifier in np.unique(identifiers):
-        #     # Find indices where this identifier occurs
-        #     indices = np.where(identifiers == identifier)[0]
-        #     # Randomly select one index and set it to 1 in the mask tensor
-        #     mask[indices[0]] = 1
+        for identifier in np.unique(identifiers):
+            # Find indices where this identifier occurs
+            indices = np.where(identifiers == identifier)[0]
+            # Randomly select one index and set it to 1 in the mask tensor
+            mask[indices[0]] = 1
        
         #### Asymmetric unit mask
         #### ---------------------
         
-        mask = self.get_asym_unit_position(frac_coords, symd.load_group(data_dict['spacegroup'], dim=3))
+        # mask = self.get_asym_unit_position(frac_coords, symd.load_group(data_dict['spacegroup'], dim=3))
         
-        # randomly keep one of the selected (mask value is 1) atoms
-        unique_identifiers = np.unique(identifiers)
-        for identifier in unique_identifiers:
-            if sum(mask[identifiers == identifier]) != 1:
-                try:
-                    true_indices = np.where(mask[identifiers == identifier])[0]
-                    new_mask = np.zeros_like(mask[identifiers == identifier], dtype=bool)
-                    new_mask[random.choice(true_indices)] = True
-                    mask[identifiers == identifier] = new_mask
-                except:
-                    new_mask = np.zeros_like(mask[identifiers == identifier], dtype=bool)
-                    new_mask[random.choice(np.arange(len(mask[identifiers == identifier])))] = True
-                    mask[identifiers == identifier] = new_mask
+        # # randomly keep one of the selected (mask value is 1) atoms
+        # unique_identifiers = np.unique(identifiers)
+        # for identifier in unique_identifiers:
+        #     if sum(mask[identifiers == identifier]) != 1:
+        #         try:
+        #             true_indices = np.where(mask[identifiers == identifier])[0]
+        #             new_mask = np.zeros_like(mask[identifiers == identifier], dtype=bool)
+        #             new_mask[random.choice(true_indices)] = True
+        #             mask[identifiers == identifier] = new_mask
+        #         except:
+        #             new_mask = np.zeros_like(mask[identifiers == identifier], dtype=bool)
+        #             new_mask[random.choice(np.arange(len(mask[identifiers == identifier])))] = True
+        #             mask[identifiers == identifier] = new_mask
                     
-        assert sum(mask) == len(unique_identifiers), "Length of asymmetric unit must match with unique identifiers."
+        # assert sum(mask) == len(unique_identifiers), "Length of asymmetric unit must match with unique identifiers."
         
         frac_coords = frac_coords[mask.astype(bool)]
         atom_types = atom_types[mask.astype(bool)]
