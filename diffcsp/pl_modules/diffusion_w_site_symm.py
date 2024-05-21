@@ -108,8 +108,8 @@ def modify_frac_coords(traj:Dict, spacegroups:List[int], num_repr:List[int]) -> 
     updated_num_atoms = []
     updated_atom_types = []
     updated_site_symm = []
-    
-    for index in range(len(num_repr)):
+    print("Replicating atoms based on site symmetries")
+    for index in tqdm(range(len(num_repr))):
         if num_repr[index] > 0:
             # if something is predicted, otherwise it is an empty crystal which we are post-processing
             # this might happen if we predict a crystal with only dummy representative atoms
@@ -209,7 +209,7 @@ class CSPDiffusion(BaseModule):
                     group_mask = site_symm_binary
                 else:
                     group_mask = group_mask + site_symm_binary
-            sg_to_group_ss_mask[spacegroup_number] = group_mask == 0
+            sg_to_group_ss_mask[spacegroup_number] = group_mask != 0
         return torch.FloatTensor(sg_to_group_ss_mask)
 
 
@@ -525,7 +525,6 @@ class CSPDiffusion(BaseModule):
         traj[0]['ks'] = traj[0]['ks'][(1 - empty_crystals).bool()]
         traj[0]['lattices'] = traj[0]['lattices'][(1 - empty_crystals).bool()]
         print(f"Number of empty crystals generated: {empty_crystals.sum().item()}/{batch_size}")
-        
         # use predicted site symmetry to create copies of atoms
         # frac coords, atom types and num atoms removed for empty crystals in modify_frac_coords()
         traj[0] = modify_frac_coords(traj[0], batch.spacegroup, traj[0]['num_atoms'])
