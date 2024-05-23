@@ -22,8 +22,8 @@ from pyxtal.symmetry import search_cloest_wp, Group
 
 from diffcsp.common.utils import PROJECT_ROOT
 from diffcsp.common.data_utils import (
-    EPSILON, cart_to_frac_coords, mard, lengths_angles_to_volume, lattice_params_to_matrix_torch, wyckoff_category_to_labels,
-    frac_to_cart_coords, min_distance_sqr_pbc, lattice_ks_to_matrix_torch, get_site_symmetry_binary_repr,
+    EPSILON, cart_to_frac_coords, mard, lengths_angles_to_volume, lattice_params_to_matrix_torch,
+    frac_to_cart_coords, min_distance_sqr_pbc, lattice_ks_to_matrix_torch,
     sg_to_ks_mask, mask_ks, N_SPACEGROUPS)
 
 from diffcsp.pl_modules.diff_utils import d_log_p_wrapped_normal
@@ -31,25 +31,25 @@ from diffcsp.pl_modules.model import build_mlp
 
 MAX_ATOMIC_NUM=100
 NUM_WYCKOFF = 186
-
-CLUSTERED_SITES = json.load(open('/home/mila/d/daniel.levy/scratch/MatSci/intel-mat-diffusion/cluster_sites.json', 'r'))
+NUM_SPACEGROUPS = 231
+SITE_SYMM_AXES = 15
+SITE_SYMM_PGS = 13
+SITE_SYMM_DIM = SITE_SYMM_AXES * SITE_SYMM_PGS
+SG_CONDITION_DIM = 397
 
 class DiscreteNoise(nn.Module):
-    def __init__(self, atom_type_marginals, wyckoff_marginals_per_sg, beta_scheduler):
+    def __init__(self, atom_type_marginals, site_symm_marginals_per_sg, beta_scheduler):
         super().__init__()
         self.beta_scheduler = beta_scheduler
-        #self.site_symm_marginals = site_symm_marginals
-        #self.ss_marginals_list = self.ss_to_sections(site_symm_marginals)
-        self.ss_marginals_per_sg = wyckoff_marginals_per_sg
-        
+        self.site_symm_marginals_per_sg = site_symm_marginals_per_sg
         self.atom_type_marginals = atom_type_marginals
-        self.P_ss = nn.Parameter(wyckoff_marginals_per_sg.unsqueeze(1).expand(-1, NUM_WYCKOFF, -1).clone(), requires_grad=False)
+
+        self.P_ss = nn.ParameterList([nn.Parameter(self.site_symm_marginals_per_sg[i].unsqueeze(-2).expand(NUM_SPACEGROUPS, SITE_SYMM_PGS, SITE_SYMM_PGS).clone(), requires_grad=False) for i in range(SITE_SYMM_AXES)])
         self.P_a = nn.Parameter(atom_type_marginals.unsqueeze(0).expand(MAX_ATOMIC_NUM, -1).clone(), requires_grad=False)
 
-    #def ss_to_sections(self, ss):
-    #    ss_list = [ss[..., self.ss_section_idx[i]: self.ss_section_idx[i+1]] for i in range(len(self.ss_section_idx)-1)]
-    #    return ss_list
-    
+    def ss_to_sections(self, ss):
+        return [ss[..., i*SITE_SYMM_PGS:(i+1)*SITE_SYMM_PGS] for i in range(SITE_SYMM_AXES)]
+
     def multiply_block_diagonal(self, Qs, d):
         '''
         Multiply each matrix Qi in Qs with the corresponding block of d
@@ -74,7 +74,7 @@ class DiscreteNoise(nn.Module):
         return self.q_t(self.P_a, t)
 
     def q_t_ss(self, t, sgs):
-        return self.q_t(self.P_ss[sgs], t)
+        return [self.q_t(self.P_ss[i][sgs], t) for i in range(len(self.P_ss))]
 
     def q_t_bar(self, P, t):
         alpha_bar = self.beta_scheduler.alphas_cumprod[t]
@@ -85,7 +85,7 @@ class DiscreteNoise(nn.Module):
         return self.q_t_bar(self.P_a, t)
 
     def q_t_bar_ss(self, t, sgs):
-        return self.q_t_bar(self.P_ss[sgs], t)
+        return [self.q_t_bar(self.P_ss[i][sgs], t) for i in range(len(self.P_ss))]
 
     def sigma_sqr_ratio(self, s_int, t_int):
         return self.beta_scheduler.alphas_cumprod[t_int] / self.beta_scheduler.alphas_cumprod[s_int]
@@ -96,15 +96,20 @@ class DiscreteNoise(nn.Module):
         return prob_atom_types
     
     def apply_site_symm_noise(self, site_symm, t, sgs):
-        Q_t_bar = self.q_t_bar_ss(t, sgs)
-        prob_site_symms = site_symm @  Q_t_bar
+        Q_t_bars = self.q_t_bar_ss(t, sgs)
+        prob_site_symms = self.multiply_block_diagonal(Q_t_bars, site_symm)
         return prob_site_symms
 
     def sample_atom_types(self, atom_probs):
         return F.one_hot(torch.multinomial(atom_probs, 1).reshape(-1), MAX_ATOMIC_NUM).float()
-    
-    def sample_site_symms(self, site_symm_probs):
-        return F.one_hot(torch.multinomial(site_symm_probs, 1).reshape(-1), MAX_ATOMIC_NUM).float()
+
+    def sample_site_symms(self, site_symms):
+        outs = []
+        idx = 0
+        for ni in self.ss_lengths:
+            outs.append(F.one_hot(torch.multinomial(site_symms[..., idx:idx+ni], 1).reshape(-1), ni).float())
+            idx += ni
+        return torch.cat(outs, 1)
     
     def sample_limit_dist(self, node_mask, sgs):
         """ Sample from the limit distribution of the diffusion process"""
@@ -114,10 +119,14 @@ class DiscreteNoise(nn.Module):
         U_a = F.one_hot(U_a, num_classes=a_limit.shape[-1]).float()
         U_a = U_a * node_mask.unsqueeze(-1)
 
-        ss_limit = self.ss_marginals_per_sg[sgs].unsqueeze(1).expand(-1, n_max, -1)
-        U_ss = ss_limit.flatten(end_dim=-2).multinomial(1).reshape(bs, n_max).to(node_mask.device)
-        U_ss = F.one_hot(U_ss, num_classes=ss_limit.shape[-1]).float()
-        U_ss = U_ss * node_mask.unsqueeze(-1)
+        U_ss_list = []
+        for ss_marginals_i_per_sg in self.site_symm_marginals_per_sg:
+            ss_marginals_i = ss_marginals_i_per_sg[sgs]
+            ss_limit_i = ss_marginals_i.unsqueeze(-2).expand(bs, n_max, -1)
+            U_ss_i = ss_limit_i.flatten(end_dim=-2).multinomial(1).reshape(bs, n_max).to(node_mask.device)
+            U_ss_i = F.one_hot(U_ss_i, num_classes=ss_limit_i.shape[-1]).float()
+            U_ss_list.append(U_ss_i)
+        U_ss = torch.cat(U_ss_list, dim=-1)
 
         return U_a, U_ss
 
@@ -129,8 +138,10 @@ class DiscreteNoise(nn.Module):
         bs, n = node_mask.shape
         # The masked rows should define probability distributions as well
         prob_a[~node_mask] = 1 / prob_a.shape[-1]
-        prob_ss[~node_mask] = 1 / prob_ss.shape[-1]
-
+        prob_ss_list = self.ss_to_sections(prob_ss)
+        #prob_ss_norm_list = []
+        for prob_ss_i in prob_ss_list:
+            prob_ss_i[~node_mask] = 1 / prob_ss_i.shape[-1]
         # Flatten the probability tensor to sample with multinomial
         prob_a = prob_a.reshape(bs * n, -1)       # (bs * n, dx_out)
         # Sample a
@@ -183,7 +194,10 @@ class DiscreteNoise(nn.Module):
         Qtb_ss = self.q_t_bar_ss(t, sgs)
         Qsb_ss = self.q_t_bar_ss(s, sgs)
         Qt_ss = self.q_t_ss(t, sgs)
-        return self.p_s_and_t_given_0(z_t_ss, Qt_ss, Qsb_ss, Qtb_ss)
+        p_s_and_t_given_0_site_symms = []#torch.zeros((list(z_t_ss.shape[:-1]) +  [27, 0]), device=z_t_ss.device)
+        for i in range(len(self.P_ss)):
+            p_s_and_t_given_0_site_symms.append(self.p_s_and_t_given_0(z_t_ss[i], Qt_ss[i], Qsb_ss[i], Qtb_ss[i]))
+        return p_s_and_t_given_0_site_symms
 
     def sample_zs_from_zt_and_pred(self, z_t_a, z_t_ss, pred_a, pred_ss, t, s, node_mask, sgs):
         """Samples from zs ~ p(zs | zt). Only used during sampling. """
@@ -199,9 +213,9 @@ class DiscreteNoise(nn.Module):
         # Normalize predictions for the categorical features
         pred_a = F.softmax(pred_a, dim=-1)               # bs, n, d0
         pred_ss = F.softmax(pred_ss, dim=-1)              # bs, n, d0
-
+        z_t_ss_split = self.ss_to_sections(z_t_ss)
         p_s_and_t_given_0_atom_types = self.p_s_and_t_given_0_a(z_t_a, t, s)
-        p_s_and_t_given_0_site_symms = self.p_s_and_t_given_0_ss(z_t_ss, t, s, sgs)
+        p_s_and_t_given_0_site_symms = self.p_s_and_t_given_0_ss(z_t_ss_split, t, s, sgs)
 
 
         # Dim of these two tensors: bs, N, d0, d_t-1
@@ -210,14 +224,18 @@ class DiscreteNoise(nn.Module):
         unnormalized_prob_a[torch.sum(unnormalized_prob_a, dim=-1) == 0] = 1e-5
         prob_a = unnormalized_prob_a / torch.sum(unnormalized_prob_a, dim=-1, keepdim=True)  # bs, n, d_t-1
 
-        weighted_ss = pred_ss.unsqueeze(-1) * p_s_and_t_given_0_site_symms         # bs, n, d0, d_t-1
-        unnormalized_prob_ss = weighted_ss.sum(dim=2)                     # bs, n, d_t-1
-        unnormalized_prob_ss[torch.sum(unnormalized_prob_ss, dim=-1) == 0] = 1e-5
-        prob_ss = unnormalized_prob_ss / torch.sum(unnormalized_prob_ss, dim=-1, keepdim=True)  # bs, n, d_t-1
-
+        pred_ss_split = self.ss_to_sections(pred_ss)
+        prob_ss_list = []
+        for pred_ss_i, p_s_and_t_given_0_site_symms_i in zip(pred_ss_split, p_s_and_t_given_0_site_symms):
+            weighted_ss = pred_ss_i.unsqueeze(-1) * p_s_and_t_given_0_site_symms_i         # bs, n, d0, d_t-1
+            unnormalized_prob_ss = weighted_ss.sum(dim=2)                     # bs, n, d_t-1
+            unnormalized_prob_ss[torch.sum(unnormalized_prob_ss, dim=-1) == 0] = 1e-5
+            prob_ss = unnormalized_prob_ss / torch.sum(unnormalized_prob_ss, dim=-1, keepdim=True)  # bs, n, d_t-1
+            prob_ss_list.append(prob_ss)
+        prob_ss = torch.cat(prob_ss_list, -1)
 
         assert ((prob_a.sum(dim=-1) - 1).abs() < 1e-4).all()
-        assert ((prob_ss.sum(dim=-1) - 1).abs() < 1e-4).all()
+        assert ((prob_ss.sum(dim=-1) - len(prob_ss_list)).abs() < 1e-4).all()
 
         sampled_a_s, sampled_ss_s = self.sample_discrete_features(prob_a, prob_ss, node_mask)
         return sampled_a_s, sampled_ss_s
@@ -247,37 +265,46 @@ def split_argmax_sitesymm(site_symm:torch.Tensor) -> np.ndarray:
 
 
 def modify_frac_coords_one(frac_coords, site_symm, atom_types, spacegroup):
-    """
-    perform replication for one crystal
-    takes frac coords of representatives, corresponding predicted wyckoff labels, atom types along with spacegroup
-    applies each wyckoff position on frac coords to obtain the entire orbit
-    """
+    spacegroup = spacegroup.item()
+    site_symm_axis = site_symm.reshape(-1, SITE_SYMM_AXES, SITE_SYMM_PGS).detach().cpu()
+    # Get site symmetry of each WP for the spacegroup
+    wp_to_site_symm = dict()
+    for wp in Group(spacegroup).Wyckoff_positions:
+        wp.get_site_symmetry()
+        wp_to_site_symm[wp] = wp.get_site_symmetry_object().to_one_hot()
 
-    spacegroup = Group(spacegroup.item())
-    
-    # convert the site_symm from one-hot to categorical
-    int_wyckoff_labels = torch.where(site_symm != 0, site_symm, torch.tensor(float('-inf'), device=frac_coords.device)).argmax(dim=1)
-
-    # get the string labels for wyckoff positions
-    pred_wp_labels = wyckoff_category_to_labels([int_label.item() for int_label in int_wyckoff_labels])
-    actual_spg_labels = [w.get_label() for w in spacegroup.Wyckoff_positions]
-    if not set(pred_wp_labels).issubset(set(actual_spg_labels)):
-        # check if the predicted set of wyckoff position belongs to the spacegroup
-        hydra.utils.log.warning("Doesn't satisfy the spacegroup symmetry")
-        return None, 0, None, None
-    
-    new_frac_coords, new_atom_types, new_site_symm = [], [], []
     # iterate over frac coords and corresponding site-symm
-    for (pred_wp_label, sym, frac_coord, atm_type) in zip(pred_wp_labels, site_symm, frac_coords, atom_types):
-        
-        # get the wyckoff position based on the predicted site symmetry
-        wp = spacegroup.get_wyckoff_position(pred_wp_label)
-        
-        # use wp operations on frac_coord
+    new_frac_coords, new_atom_types, new_site_symm = [], [], []
+    for (sym, frac_coord, atm_type) in zip(site_symm_axis, frac_coords, atom_types):
         frac_coord = frac_coord.cpu().detach().numpy()
-        frac_coord = search_cloest_wp(spacegroup, wp, wp.ops[0], frac_coord)%1.
-        for index in range(len(wp)):
-            new_frac_coords.append(wp[index].operate(frac_coord)%1.)
+
+        # Get all WPs that are closest in terms of site symmetry
+        wp_to_ss_dist = {wp: torch.norm(sym.flatten() - ss.flatten()) for wp, ss in wp_to_site_symm.items()}
+        min_ss_dist = min(wp_to_ss_dist.values())
+        closest_ss_wps = [wp for wp, dist in wp_to_ss_dist.items() if dist==min_ss_dist]
+
+        # For each WP find closest position in space
+        closes = []
+        for wp in closest_ss_wps:
+            for orbit_index in range(len(wp.ops)):
+                close = search_cloest_wp(Group(spacegroup), wp, wp.ops[orbit_index], frac_coord)%1.
+                closes.append((close, wp, orbit_index, np.linalg.norm(np.minimum((close - frac_coord)%1., (frac_coord - close)%1.))))
+        try:
+            # pick the nearest wp to project
+            closest = sorted(closes, key=lambda x: x[-1])[0]
+            wyckoff = closest[1]
+            repr_index = closest[2]
+            
+            # use wp operations on frac_coord
+            frac_coord = closest[0]
+            for index in range(len(wyckoff)):
+                # new_frac_coords.append(wyckoff[index].operate(frac_coord)%1.)
+                new_frac_coords.append(wyckoff[(index + repr_index) % len(wyckoff)].operate(frac_coord)%1.)
+                new_atom_types.append(atm_type.cpu().detach().numpy())
+                new_site_symm.append(sym)
+        except:
+            # print('Weird things happen, and I did not predict correctly')
+            new_frac_coords.append(frac_coord)
             new_atom_types.append(atm_type.cpu().detach().numpy())
             new_site_symm.append(sym.cpu().detach().numpy())
             
@@ -285,49 +312,7 @@ def modify_frac_coords_one(frac_coords, site_symm, atom_types, spacegroup):
     new_atom_types = np.stack(new_atom_types)
     new_site_symm = np.stack(new_site_symm)
     return new_frac_coords, len(new_frac_coords), new_atom_types, new_site_symm
-# def modify_frac_coords_one(frac_coords, site_symm, atom_types, spacegroup):
-#     spacegroup = spacegroup.item()
-    
-    
-#     # perform split-argmax to obtain binary representation
-#     site_symm_argmax = split_argmax_sitesymm(site_symm)
-    
-#     # mapping from binary representation to hm-notation
-#     wp_to_binary = dict()
-#     for wp in Group(spacegroup).Wyckoff_positions:
-#         wp.get_site_symmetry()
-#         wp_to_binary[wp] = get_site_symmetry_binary_repr(CLUSTERED_SITES[wp.site_symm], label=wp.get_label()).numpy()
-     
-     
-#     # iterate over frac coords and corresponding site-symm
-#     new_frac_coords, new_atom_types = [], []
-#     for (sym, frac_coord, atm_type) in zip(site_symm_argmax, frac_coords, atom_types):
-#         frac_coord = frac_coord.cpu().detach().numpy()
-        
-#         # find all wps whose hm-notation align with sym
-#         closes = []   
-#         for wp, binary in wp_to_binary.items():
-#             if np.sum(np.equal(binary, sym)) == sym.shape[-1]:
-#                 close = search_cloest_wp(Group(spacegroup), wp, wp.ops[0], frac_coord)
-#                 closes.append((close, wp, np.linalg.norm(np.minimum((close - frac_coord)%1., (frac_coord - close)%1.))))
-#         try:
-#             # pick the nearest wp to project
-#             closest = sorted(closes, key=lambda x: x[-1])[0]
-#             wyckoff = closest[1]
-            
-#             # use wp operations on frac_coord
-#             frac_coord = closest[0]
-#             for index in range(len(wyckoff)): 
-#                 new_frac_coords.append(wyckoff[index].operate(frac_coord)%1.)
-#                 new_atom_types.append(atm_type.cpu().detach().numpy())
-#         except:
-#             print('Weird things happen, and I did not predict correctly')
-#             new_frac_coords.append(frac_coord)
-#             new_atom_types.append(atm_type.cpu().detach().numpy())
-        
-#     new_frac_coords = np.stack(new_frac_coords)
-#     new_atom_types = np.stack(new_atom_types)
-#     return new_frac_coords, len(new_frac_coords), new_atom_types
+
 
 def modify_frac_coords(traj:Dict, spacegroups:List[int], num_repr:List[int]) -> Dict:
     device = traj['frac_coords'].device
@@ -343,7 +328,7 @@ def modify_frac_coords(traj:Dict, spacegroups:List[int], num_repr:List[int]) -> 
             # this might happen if we predict a crystal with only dummy representative atoms
             new_frac_coords, new_num_atoms, new_atom_types, new_site_sym = modify_frac_coords_one(
                     traj['frac_coords'][total_atoms:total_atoms+num_repr[index]], # num_repr x 3
-                    traj['site_symm'][total_atoms:total_atoms+num_repr[index]], # num_repr x 66
+                    traj['site_symm'][total_atoms:total_atoms+num_repr[index]], # num_repr x 195
                     traj['atom_types'][total_atoms:total_atoms+num_repr[index]], # num_repr x 100
                     spacegroups[index], 
                 )
@@ -427,8 +412,8 @@ class CSPDiffusion(BaseModule):
 
 
     def init_discrete_noise(self):
-        atom_type_marginals = torch.load('/home/mila/d/daniel.levy/scratch/MatSci/intel-mat-diffusion/data/mp_20/train_atom_types_marginals.pt')
-        site_symm_marginals = torch.load('/home/mila/d/daniel.levy/scratch/MatSci/intel-mat-diffusion/data/mp_20/train_wyckoff_marginals_per_sg.pt')
+        atom_type_marginals = torch.load(self.hparams.data.root_path + '/train_atom_types_marginals.pt')
+        site_symm_marginals = torch.load(self.hparams.data.root_path + '/train_site_symm_marginals_per_sg.pt')
         return DiscreteNoise(atom_type_marginals, site_symm_marginals, self.beta_scheduler)
 
     def forward(self, batch):
@@ -436,8 +421,7 @@ class CSPDiffusion(BaseModule):
         batch_size = batch.num_graphs
         dummy_repr_ind = batch.dummy_repr_ind
         atom_types, node_mask = to_dense_batch(batch.atom_types, batch.batch, fill_value=0)
-        site_symms, node_mask = to_dense_batch(batch.wyckoff_labels, batch.batch, fill_value=0)
-
+        site_symms, node_mask = to_dense_batch(batch.site_symm.flatten(-2,-1), batch.batch, fill_value=0)
         gt_spacegroup_onehot = F.one_hot(batch.spacegroup - 1, num_classes=N_SPACEGROUPS).float()
         times = self.beta_scheduler.uniform_sample_t(batch_size, self.device)
         time_emb = self.time_embedding(times) + self.spacegroup_embedding(gt_spacegroup_onehot)
@@ -476,12 +460,7 @@ class CSPDiffusion(BaseModule):
         input_frac_coords = (frac_coords + sigmas_per_atom * rand_x) % 1.
 
         gt_atom_types_onehot = F.one_hot(atom_types, num_classes=MAX_ATOMIC_NUM).float()
-        #gt_site_symm_binary = site_symms
-        gt_site_symm_binary = F.one_hot(site_symms, num_classes=NUM_WYCKOFF).float()
-        
-
-        rand_t = torch.randn_like(gt_atom_types_onehot)
-        rand_symm = torch.randn_like(gt_site_symm_binary)
+        gt_site_symm_binary = site_symms
 
         atom_type_probs = self.discrete_noise.apply_atom_noise(gt_atom_types_onehot, times)
         site_symm_probs = self.discrete_noise.apply_site_symm_noise(gt_site_symm_binary, times, batch.spacegroup)
