@@ -14,6 +14,7 @@ from pymatgen.core.structure import Structure
 from pymatgen.core.composition import Composition
 from pymatgen.core.lattice import Lattice
 from pymatgen.analysis.structure_matcher import StructureMatcher
+from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 from matminer.featurizers.site.fingerprint import CrystalNNFingerprint
 from matminer.featurizers.composition.composite import ElementProperty
 
@@ -28,6 +29,7 @@ from eval_utils import (
     smact_validity, structure_validity, CompScaler, get_fp_pdist,
     load_config, load_data, get_crystals_list, prop_model_eval, compute_cov)
 
+Crystal_Tol = 0.01
 CrystalNNFP = CrystalNNFingerprint.from_preset("ops")
 CompFP = ElementProperty.from_preset('magpie')
 
@@ -68,6 +70,7 @@ class Crystal(object):
         self.atom_types = crys_array_dict['atom_types']
         self.lengths = crys_array_dict['lengths']
         self.angles = crys_array_dict['angles']
+        self.spacegroup = crys_array_dict['spacegroups']
         
         # check for NaN values 
         if np.isnan(self.lengths).any() or np.isinf(self.lengths).any():
@@ -125,6 +128,7 @@ class Crystal(object):
         self.get_composition()
         self.get_validity()
         self.get_fingerprints()
+        self.get_symmetry()
 
 
     def get_structure(self):
@@ -212,6 +216,19 @@ class Crystal(object):
             return
         self.struct_fp = np.array(site_fps).mean(axis=0)
 
+    def get_symmetry(self):
+        if self.constructed:
+            spga = SpacegroupAnalyzer(self.structure, symprec=Crystal_Tol)
+            try:
+                self.real_spacegroup = spga.get_space_group_number()
+            except Exception:
+                self.real_spacegroup = 1
+            if self.real_spacegroup is None:
+                # Default to setting to 1
+                self.real_spacegroup = 1
+        else:
+            self.real_spacegroup = None
+        self.spacegroup_match = self.real_spacegroup == self.spacegroup
 
 class RecEval(object):
 
@@ -350,6 +367,17 @@ class GenEval(object):
         else:
             return {'wdist_prop': None}
 
+    def get_spacegroup_wdist(self):
+        pred_spacegroup = [c.spacegroup for c in self.valid_samples]
+        gt_spacegroup = [c.spacegroup for c in self.gt_crys]
+        wdist_spacegroup = wasserstein_distance(pred_spacegroup, gt_spacegroup)
+        return {'wdist_spacegroup': wdist_spacegroup}
+
+    def get_spacegroup_match(self):
+        spacegroup_match = np.array([c.spacegroup_match for c in self.valid_samples]).mean()
+        return {'spacegroup_match': spacegroup_match}
+
+
     def get_coverage(self):
         cutoff_dict = COV_Cutoffs[self.eval_model_name]
         (cov_metrics_dict, combined_dist_dict) = compute_cov(
@@ -365,6 +393,8 @@ class GenEval(object):
         metrics.update(self.get_prop_wdist())
         metrics.update(self.get_num_elem_wdist())
         metrics.update(self.get_coverage())
+        metrics.update(self.get_spacegroup_wdist())
+        metrics.update(self.get_spacegroup_match())
         return metrics
 
 
@@ -427,12 +457,14 @@ def get_crystal_array_list(file_path, batch_idx=0):
 
 def get_gt_crys_ori(cif):
     structure = Structure.from_str(cif,fmt='cif')
+    spacegroup = structure.get_space_group_info()[1]
     lattice = structure.lattice
     crys_array_dict = {
         'frac_coords':structure.frac_coords,
         'atom_types':np.array([_.Z for _ in structure.species]),
         'lengths': np.array(lattice.abc),
-        'angles': np.array(lattice.angles)
+        'angles': np.array(lattice.angles),
+        'spacegroups': spacegroup
     }
     return Crystal(crys_array_dict) 
 
