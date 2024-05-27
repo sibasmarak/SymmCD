@@ -19,7 +19,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from torch_geometric.data import Data, Batch, DataLoader
 from torch.utils.data import Dataset
-from eval_utils import load_model, lattices_to_params_shape, get_crystals_list
+from scripts.eval_utils import load_model, lattices_to_params_shape, get_crystals_list
 
 from pymatgen.core.structure import Structure
 from pymatgen.core.lattice import Lattice
@@ -120,12 +120,14 @@ def diffusion(loader, model, step_lr):
 
 class SampleDataset(Dataset):
 
-    def __init__(self, dataset, total_num, test_ori_path, num_repr = 10):
+    def __init__(self, dataset, total_num, test_ori_path):
+        # pass the training data in the `test_ori_path` 
+        # to get the distribution of space groups and atom numbers in the training dataset
+        
         super().__init__()
         self.total_num = total_num
         self.distribution = train_dist[dataset]
         self.num_atoms = np.random.choice(len(self.distribution), total_num, p = self.distribution)
-        self.num_repr = num_repr
         self.is_carbon = dataset == 'carbon'
 
         additional_test = torch.load(test_ori_path)
@@ -202,8 +204,9 @@ def main(args):
 
     print('Evaluate the diffusion model.')
 
-    test_set = SampleDataset(args.dataset, args.batch_size * args.num_batches_to_samples, 
-                             cfg.data.datamodule.datasets.train.save_path, cfg.data.number_representatives)
+    test_set = SampleDataset(args.dataset, 
+                             args.batch_size * args.num_batches_to_samples, 
+                             cfg.data.datamodule.datasets.train.save_path)
     test_loader = DataLoader(test_set, batch_size = args.batch_size)
 
     start_time = time.time()

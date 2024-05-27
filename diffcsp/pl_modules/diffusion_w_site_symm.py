@@ -2,13 +2,14 @@ import math, copy
 import json, os
 import numpy as np
 import pandas as pd
-from p_tqdm import p_map
+from p_tqdm import p_map, t_map
 import itertools
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
+from torch_geometric.data import DataLoader
 
 from collections import defaultdict, Counter
 from typing import Any, Dict, List
@@ -32,6 +33,11 @@ SITE_SYMM_AXES = 15
 SITE_SYMM_PGS = 13
 SITE_SYMM_DIM = SITE_SYMM_AXES * SITE_SYMM_PGS
 SG_CONDITION_DIM = 397
+
+from scripts.generation import SampleDataset
+from scripts.compute_metrics import Crystal, GenEval, get_gt_crys_ori
+from scripts.eval_utils import lattices_to_params_shape, smact_validity, structure_validity, get_crystals_list
+
 
 def find_num_atoms(dummy_ind, total_num_atoms):
     # num_atoms states how many atoms are there in each crystal (num_repr + dummy origin)
@@ -577,9 +583,77 @@ class CSPDiffusion(BaseModule):
             on_epoch=True,
             prog_bar=True,
         )
+        
+        if (self.current_epoch + 1) % self.hparams.data.eval_every_epoch == 0 and batch_idx == 0:
+            # run a simpler evaluation
+            self.simple_gen_evaluation()
     
         return loss
 
+    def simple_gen_evaluation(self):
+        
+        eval_model_name_dataset = {
+            "mp20": "mp", # encompasses mp20, mpsa52
+            "perovskite": "perov",
+            "carbon": "carbon",
+        }
+        test_set = SampleDataset(
+                            eval_model_name_dataset[self.hparams.data.eval_model_name], 
+                            self.hparams.data.eval_generate_samples, 
+                            self.hparams.data.datamodule.datasets.train.save_path)
+        
+        test_loader = DataLoader(test_set, batch_size = 50)
+        
+        frac_coords = []
+        num_atoms = []
+        atom_types = []
+        lattices = []
+        spacegroups = []
+        site_symmetries = []
+        for idx, batch in enumerate(test_loader):
+
+            if torch.cuda.is_available():
+                batch.cuda()
+            outputs, traj = self.sample(batch, step_lr = 1e-5)
+            del traj
+            frac_coords.append(outputs['frac_coords'].detach().cpu())
+            num_atoms.append(outputs['num_atoms'].detach().cpu())
+            atom_types.append(outputs['atom_types'].detach().cpu())
+            lattices.append(outputs['lattices'].detach().cpu())
+            spacegroups.append(outputs['spacegroup'].detach().cpu())
+            site_symmetries.append(outputs['site_symm'].detach().cpu())
+            del outputs
+
+        frac_coords = torch.cat(frac_coords, dim=0)
+        num_atoms = torch.cat(num_atoms, dim=0)
+        atom_types = torch.cat(atom_types, dim=0)
+        lattices = torch.cat(lattices, dim=0)
+        spacegroups = torch.cat(spacegroups, dim=0)
+        site_symmetries = torch.cat(site_symmetries, dim=0)
+        lengths, angles = lattices_to_params_shape(lattices)
+        
+        # generated crystals
+        kwargs = {"spacegroups": spacegroups, "site_symmetries": site_symmetries}
+        pred_crys_array_list = get_crystals_list(frac_coords, atom_types, lengths, angles, num_atoms, **kwargs)
+        gen_crys = p_map(lambda x: Crystal(x), pred_crys_array_list)
+        print(f"INFO: Done generating {self.hparams.data.eval_generate_samples} crystals (Epoch: {self.current_epoch + 1})")
+        
+        # ground truth crystals
+        if os.path.exists(self.hparams.data.datamodule.datasets.test.gt_crys_path):
+            gt_crys = torch.load(self.hparams.data.datamodule.datasets.test.gt_crys_path)
+        else:
+            csv = pd.read_csv(self.hparams.data.datamodule.datasets.test[0].path)
+            gt_crys = t_map(get_gt_crys_ori, csv['cif'])
+            torch.save(gt_crys, self.hparams.data.datamodule.datasets.test.gt_crys_path)
+            
+        print(f"INFO: Done reading ground truth crystals (Epoch: {self.current_epoch + 1})")
+        
+        gen_evaluator = GenEval(gen_crys, gt_crys, n_samples=0, eval_model_name=self.hparams.data.eval_model_name)
+        gen_metrics = gen_evaluator.get_metrics()
+        print(gen_metrics)
+        
+        self.log_dict(gen_metrics)
+    
     def test_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
 
         output_dict = self(batch)
