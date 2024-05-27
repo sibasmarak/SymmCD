@@ -18,12 +18,12 @@ model=diffusion_w_site_symm model.use_ks=True model.ip=False model.use_gt_frac_c
 model.decoder.hidden_dim=512 model.decoder.num_layers=8 model.beta_scheduler.nu_site_symm=1 model.beta_scheduler.nu_lattice=1 model.beta_scheduler.nu_atom=1
 
 # generating eval_gen.pt (for Table 4 in DiffCSP paper, ab-initio generation) 
-# python scripts/generation.py --model_path /home/mila/s/siba-smarak.panigrahi/scratch/DiffCSP/hydra/singlerun/2024-03-17/mp_20_gnn_gt_frac_coords/ --dataset mp --label final_num_samples_20 --batch_size 5 --num_batches_to_samples 2
-# python scripts/compute_metrics.py --root_path /home/mila/s/siba-smarak.panigrahi/scratch/DiffCSP/hydra/singlerun/2024-03-17/mp_20_gnn_gt_frac_coords/ --tasks gen --gt_file data/mp_20/test.csv --label final_num_samples_20
+# python -m scripts.generation --model_path /home/mila/s/siba-smarak.panigrahi/scratch/DiffCSP/hydra/singlerun/2024-03-17/mp_20_gnn_gt_frac_coords/ --dataset mp --label final_num_samples_20 --batch_size 5 --num_batches_to_samples 2
+# python -m scripts.compute_metrics --root_path /home/mila/s/siba-smarak.panigrahi/scratch/DiffCSP/hydra/singlerun/2024-03-17/mp_20_gnn_gt_frac_coords/ --tasks gen --gt_file data/mp_20/test.csv --label final_num_samples_20
 
 # generating eval_diff.pt (for Table 1 in DiffCSP paper, crystal structure prediction (csp) task)
-# python scripts/evaluate.py --model_path <path-of-run> --label num_samples_1
-# python scripts/compute_metrics.py --root_path <path-of-run> --tasks csp --gt_file data/perov_5/test.csv --label num_samples_1
+# python -m scripts.evaluate --model_path <path-of-run> --label num_samples_1
+# python -m scripts.compute_metrics --root_path <path-of-run> --tasks csp --gt_file data/perov_5/test.csv --label num_samples_1
 
-# python scripts/evaluate.py --model_path <path-of-run> --num_evals 20 --label num_samples_20
-# python scripts/compute_metrics.py --root_path <path-of-run> --tasks csp --gt_file data/perov_5/test.csv --multi_eval --label num_samples_20 
+# python -m scripts.evaluate --model_path <path-of-run> --num_evals 20 --label num_samples_20
+# python -m scripts.compute_metrics --root_path <path-of-run> --tasks csp --gt_file data/perov_5/test.csv --multi_eval --label num_samples_20 
