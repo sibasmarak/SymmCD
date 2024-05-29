@@ -639,12 +639,12 @@ class CSPDiffusion(BaseModule):
         print(f"INFO: Done generating {self.hparams.data.eval_generate_samples} crystals (Epoch: {self.current_epoch + 1})")
         
         # ground truth crystals
-        if os.path.exists(self.hparams.data.datamodule.datasets.test.gt_crys_path):
-            gt_crys = torch.load(self.hparams.data.datamodule.datasets.test.gt_crys_path)
+        if os.path.exists(self.hparams.data.datamodule.datasets.test[0].gt_crys_path):
+            gt_crys = torch.load(self.hparams.data.datamodule.datasets.test[0].gt_crys_path)
         else:
             csv = pd.read_csv(self.hparams.data.datamodule.datasets.test[0].path)
             gt_crys = t_map(get_gt_crys_ori, csv['cif'])
-            torch.save(gt_crys, self.hparams.data.datamodule.datasets.test.gt_crys_path)
+            torch.save(gt_crys, self.hparams.data.datamodule.datasets.test[0].gt_crys_path)
             
         print(f"INFO: Done reading ground truth crystals (Epoch: {self.current_epoch + 1})")
         

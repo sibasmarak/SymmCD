@@ -325,7 +325,10 @@ class GenEval(object):
         self.eval_model_name = eval_model_name
 
         valid_crys = [c for c in pred_crys if c.valid]
-        if len(valid_crys) >= n_samples:
+        if n_samples == 0:
+            # use all valid crystals instead
+            self.valid_samples = valid_crys
+        elif len(valid_crys) >= n_samples:
             sampled_indices = np.random.choice(
                 len(valid_crys), n_samples, replace=False)
             self.valid_samples = [valid_crys[i] for i in sampled_indices]
@@ -389,6 +392,9 @@ class GenEval(object):
     def get_metrics(self):
         metrics = {}
         metrics.update(self.get_validity())
+        if len(self.valid_samples) == 0:
+            print("No valid crystals generated")
+            return metrics
         metrics.update(self.get_density_wdist())
         metrics.update(self.get_prop_wdist())
         metrics.update(self.get_num_elem_wdist())
