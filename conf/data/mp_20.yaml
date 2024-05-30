@@ -51,6 +51,7 @@ datamodule:
       - _target_: diffcsp.pl_data.dataset.CrystDataset
         name: Formation energy val
         path: ${data.root_path}/val.csv
+        gt_crys_path: ${data.root_path}/val_gt_crys.pt
         save_path: ${data.root_path}/val_ori.pt
         prop: ${data.prop}
         niggli: ${data.niggli}
