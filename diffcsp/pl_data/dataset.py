@@ -14,6 +14,8 @@ import symd
 from diffcsp.common.utils import PROJECT_ROOT
 from diffcsp.common.data_utils import (
     preprocess, preprocess_tensors, add_scaled_lattice_prop)
+EPS = 1e-4*np.random.randn(3)
+POINT = np.array([0.5, 0.5, 0.5]) + EPS
 
 
 class CrystDataset(Dataset):
@@ -89,14 +91,19 @@ class CrystDataset(Dataset):
         #### Random atom from each orbit mask
         #### --------------------------------------
         # find a single representative for each identifier which can then mask
-        mask = np.zeros_like(identifiers)
+        if 'mask' not in data_dict:
+            mask = np.zeros_like(identifiers)
 
-        # # Process each unique identifier
-        for identifier in np.unique(identifiers):
-            # Find indices where this identifier occurs
-            indices = np.where(identifiers == identifier)[0]
-            # Randomly select one index and set it to 1 in the mask tensor
-            mask[indices[0]] = 1
+            # # Process each unique identifier
+            for identifier in np.unique(identifiers):
+                # Find indices where this identifier occurs
+                indices = np.where(identifiers == identifier)[0]
+                # Get index closest to random point in center
+                min_index = ((frac_coords - POINT)**2).sum(1)[indices].argmin().item()
+                mask[indices[min_index]] = 1
+                self.cached_data[index]['mask'] = mask
+        else:
+            mask = data_dict['mask']
        
         #### Asymmetric unit mask
         #### ---------------------
