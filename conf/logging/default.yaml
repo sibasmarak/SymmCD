@@ -6,6 +6,7 @@ wandb:
   # name: ${expname}
   project: diffcsp
   entity: symmetry_group
+  name: ${runname}
   log_model: True
   mode: 'online'
   group: ${expname}

@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from torch_geometric.data import Batch
 
-from eval_utils import load_model, lattices_to_params_shape
+from scripts.eval_utils import load_model, lattices_to_params_shape
 
 from pymatgen.core.structure import Structure
 from pymatgen.core.lattice import Lattice

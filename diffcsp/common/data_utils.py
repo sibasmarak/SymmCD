@@ -327,7 +327,7 @@ def get_symmetry_info(crystal, tol=0.01, num_repr=10, use_random_repr=False):
 def build_crystal_graph(crystal, graph_method='crystalnn'):
     """
     """
-
+    crystal.perturb(0.0001)
     if graph_method == 'crystalnn':
         try:
             crystal_graph = StructureGraph.with_local_env_strategy(
@@ -811,7 +811,7 @@ def radius_graph_pbc(pos, lengths, angles, natoms, radius, max_num_neighbors_thr
     max_rep = torch.ones(3, dtype=torch.long, device=device)
     min_dist = torch.cat([min_dist_a1, min_dist_a2, min_dist_a3], dim=-1) # N_graphs * 3
 #     reps = torch.cat([rep_a1.reshape(-1,1), rep_a2.reshape(-1,1), rep_a3.reshape(-1,1)], dim=1) # N_graphs * 3
-    
+
     unit_cell_all = []
     num_cells_all = []
 

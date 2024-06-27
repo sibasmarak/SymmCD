@@ -1,11 +1,15 @@
 import math, copy
 import json
+import os
 import numpy as np
+from p_tqdm import p_map, t_map
+import pandas as pd
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.autograd import Variable
+from torch_geometric.data import DataLoader
+
 
 from collections import defaultdict
 from typing import Any, Dict, List
@@ -28,6 +32,10 @@ from diffcsp.common.data_utils import (
 
 from diffcsp.pl_modules.diff_utils import d_log_p_wrapped_normal
 from diffcsp.pl_modules.model import build_mlp
+from scripts.generation import SampleDataset
+from scripts.compute_metrics import Crystal, GenEval, get_gt_crys_ori
+from scripts.eval_utils import lattices_to_params_shape,  get_crystals_list
+
 
 MAX_ATOMIC_NUM=100
 NUM_WYCKOFF = 186
@@ -140,8 +148,8 @@ class DiscreteNoise(nn.Module):
         prob_a[~node_mask] = 1 / prob_a.shape[-1]
         prob_ss_list = self.ss_to_sections(prob_ss)
         #prob_ss_norm_list = []
-        for prob_ss_i in prob_ss_list:
-            prob_ss_i[~node_mask] = 1 / prob_ss_i.shape[-1]
+        for i in range(SITE_SYMM_AXES):
+            prob_ss_list[i][~node_mask] = 1 / prob_ss_list[i].shape[-1]
         # Flatten the probability tensor to sample with multinomial
         prob_a = prob_a.reshape(bs * n, -1)       # (bs * n, dx_out)
         # Sample a
@@ -149,11 +157,13 @@ class DiscreteNoise(nn.Module):
         atom_t = atom_t.reshape(bs, n)     # (bs, n)
         atom_t = F.one_hot(atom_t, num_classes=prob_a.shape[-1]).float()
         # Sample ss
-        prob_ss = prob_ss.reshape(bs * n, -1)       # (bs * n, dx_out)
-        # Sample a
-        site_symm_t = prob_ss.multinomial(1)                                  # (bs * n, 1)
-        site_symm_t = site_symm_t.reshape(bs, n)     # (bs, n)
-        site_symm_t = F.one_hot(site_symm_t, num_classes=prob_ss.shape[-1]).float()
+        site_symm_t_list = []
+        for i in range(SITE_SYMM_AXES):
+            prob_ss_i = prob_ss_list[i].reshape(bs * n, -1)       # (bs * n, dx_out)
+            site_symm_t_i_cat = prob_ss_i.multinomial(1).reshape(bs, n)
+            site_symm_t_i =  F.one_hot(site_symm_t_i_cat, num_classes=SITE_SYMM_PGS).float()
+            site_symm_t_list.append(site_symm_t_i)
+        site_symm_t = torch.cat(site_symm_t_list, -1)
 
         return atom_t, site_symm_t
 
@@ -244,8 +254,13 @@ class DiscreteNoise(nn.Module):
         '''
         Cross entropy loss for atom_types as well as each site_symm component
         '''
-        loss_a = F.cross_entropy(pred_a, sample_a.argmax(dim=-1))
-        loss_ss = F.cross_entropy(pred_ss, sample_ss.argmax(dim=-1))
+        loss_a = F.cross_entropy(pred_a, sample_a)
+        pred_ss_split = self.ss_to_sections(pred_ss)
+        losses = []
+        for i, pred_ss_i in enumerate(pred_ss_split):
+            loss_ss_i = F.cross_entropy(pred_ss_i, sample_ss[..., i])
+            losses.append(loss_ss_i)
+        loss_ss = torch.stack(losses).mean()
         return loss_a, loss_ss
 
 def find_num_atoms(dummy_ind, total_num_atoms):
@@ -420,7 +435,7 @@ class CSPDiffusion(BaseModule):
 
         batch_size = batch.num_graphs
         dummy_repr_ind = batch.dummy_repr_ind
-        atom_types, node_mask = to_dense_batch(batch.atom_types, batch.batch, fill_value=0)
+        atom_types, node_mask = to_dense_batch(batch.atom_types - 1, batch.batch, fill_value=0)
         site_symms, node_mask = to_dense_batch(batch.site_symm.flatten(-2,-1), batch.batch, fill_value=0)
         gt_spacegroup_onehot = F.one_hot(batch.spacegroup - 1, num_classes=N_SPACEGROUPS).float()
         times = self.beta_scheduler.uniform_sample_t(batch_size, self.device)
@@ -462,13 +477,9 @@ class CSPDiffusion(BaseModule):
         gt_atom_types_onehot = F.one_hot(atom_types, num_classes=MAX_ATOMIC_NUM).float()
         gt_site_symm_binary = site_symms
 
-        atom_type_probs = self.discrete_noise.apply_atom_noise(gt_atom_types_onehot, times)
-        site_symm_probs = self.discrete_noise.apply_site_symm_noise(gt_site_symm_binary, times, batch.spacegroup)
-        atom_types, site_symms = self.discrete_noise.sample_discrete_features(atom_type_probs, site_symm_probs, node_mask)
-        #atom_types = self.discrete_noise.sample_atom_types(atom_type_probs)
-        #site_symms = self.discrete_noise.sample_site_symms(site_symm_probs)
-        #atom_type_probs = (c0.repeat_interleave(batch.num_atoms)[:, None] * gt_atom_types_onehot + c1.repeat_interleave(batch.num_atoms)[:, None] * rand_t)
-        #site_symm_probs = (c0.repeat_interleave(batch.num_atoms)[:, None] * gt_site_symm_binary + c1.repeat_interleave(batch.num_atoms)[:, None] * rand_symm)
+        atom_type_noised_probs = self.discrete_noise.apply_atom_noise(gt_atom_types_onehot, times)
+        site_symm_noised_probs = self.discrete_noise.apply_site_symm_noise(gt_site_symm_binary, times, batch.spacegroup)
+        atom_types_noised, site_symms_noised = self.discrete_noise.sample_discrete_features(atom_type_noised_probs, site_symm_noised_probs, node_mask)
 
         if self.keep_coords:
             input_frac_coords = frac_coords
@@ -479,9 +490,9 @@ class CSPDiffusion(BaseModule):
 
         # pass noised site symmetries and behave similar to atom type probs
         lattice_feats = input_ks if self.use_ks else input_lattice
-        pred_lattice, pred_x, pred_t, pred_symm = self.decoder(time_emb, atom_types[node_mask], input_frac_coords, 
+        pred_lattice, pred_x, pred_t, pred_symm = self.decoder(time_emb, atom_types_noised[node_mask], input_frac_coords, 
                                                     lattice_feats, input_lattice, batch.num_atoms, 
-                                                    batch.batch, site_symm_probs=site_symms[node_mask])
+                                                    batch.batch, site_symm_probs=site_symms_noised[node_mask])
 
         tar_x = d_log_p_wrapped_normal(sigmas_per_atom * rand_x, sigmas_per_atom) / torch.sqrt(sigmas_norm_per_atom)
 
@@ -496,7 +507,7 @@ class CSPDiffusion(BaseModule):
         # loss_symm = F.mse_loss(pred_symm * (1 - dummy_repr_ind), rand_symm * (1 - dummy_repr_ind))
         #loss_symm = F.mse_loss(pred_symm, rand_symm)
 
-        loss_type, loss_symm = self.discrete_noise.discrete_loss(atom_types[node_mask], site_symms[node_mask], pred_t, pred_symm)
+        loss_type, loss_symm = self.discrete_noise.discrete_loss(batch.atom_types - 1, batch.site_symm.argmax(-1), pred_t, pred_symm)
 
         loss = (
             self.hparams.cost_lattice * loss_lattice +
@@ -730,7 +741,76 @@ class CSPDiffusion(BaseModule):
             on_epoch=True,
             prog_bar=True,
         )
+
+        if (self.current_epoch + 1) % self.hparams.data.eval_every_epoch == 0 and batch_idx == 0:
+            # run a simpler evaluation
+            self.simple_gen_evaluation()
+
         return loss
+
+    def simple_gen_evaluation(self):
+        
+        eval_model_name_dataset = {
+            "mp20": "mp", # encompasses mp20, mpsa52
+            "perovskite": "perov",
+            "carbon": "carbon",
+        }
+        test_set = SampleDataset(
+                            eval_model_name_dataset[self.hparams.data.eval_model_name], 
+                            self.hparams.data.eval_generate_samples, 
+                            self.hparams.data.datamodule.datasets.train.save_path)
+        
+        test_loader = DataLoader(test_set, batch_size = 50)
+        
+        frac_coords = []
+        num_atoms = []
+        atom_types = []
+        lattices = []
+        spacegroups = []
+        site_symmetries = []
+        for idx, batch in enumerate(test_loader):
+
+            if torch.cuda.is_available():
+                batch.cuda()
+            outputs, traj = self.sample(batch, step_lr = 1e-5)
+            del traj
+            frac_coords.append(outputs['frac_coords'].detach().cpu())
+            num_atoms.append(outputs['num_atoms'].detach().cpu())
+            atom_types.append(outputs['atom_types'].detach().cpu())
+            lattices.append(outputs['lattices'].detach().cpu())
+            spacegroups.append(outputs['spacegroup'].detach().cpu())
+            site_symmetries.append(outputs['site_symm'].detach().cpu())
+            del outputs
+
+        frac_coords = torch.cat(frac_coords, dim=0)
+        num_atoms = torch.cat(num_atoms, dim=0)
+        atom_types = torch.cat(atom_types, dim=0)
+        lattices = torch.cat(lattices, dim=0)
+        spacegroups = torch.cat(spacegroups, dim=0)
+        site_symmetries = torch.cat(site_symmetries, dim=0)
+        lengths, angles = lattices_to_params_shape(lattices)
+        
+        # generated crystals
+        kwargs = {"spacegroups": spacegroups, "site_symmetries": site_symmetries}
+        pred_crys_array_list = get_crystals_list(frac_coords, atom_types, lengths, angles, num_atoms, **kwargs)
+        gen_crys = p_map(lambda x: Crystal(x), pred_crys_array_list)
+        print(f"INFO: Done generating {self.hparams.data.eval_generate_samples} crystals (Epoch: {self.current_epoch + 1})")
+        
+        # ground truth crystals
+        if os.path.exists(self.hparams.data.datamodule.datasets.val[0].gt_crys_path):
+            gt_crys = torch.load(self.hparams.data.datamodule.datasets.val[0].gt_crys_path)
+        else:
+            csv = pd.read_csv(self.hparams.data.datamodule.datasets.val[0].path)
+            gt_crys = t_map(get_gt_crys_ori, csv['cif'])
+            torch.save(gt_crys, self.hparams.data.datamodule.datasets.val[0].gt_crys_path)
+            
+        print(f"INFO: Done reading ground truth crystals (Epoch: {self.current_epoch + 1})")
+        
+        gen_evaluator = GenEval(gen_crys, gt_crys, n_samples=0, eval_model_name=self.hparams.data.eval_model_name)
+        gen_metrics = gen_evaluator.get_metrics()
+        print(gen_metrics)
+        
+        self.log_dict(gen_metrics)
 
     def test_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
 

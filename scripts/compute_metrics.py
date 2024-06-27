@@ -218,8 +218,8 @@ class Crystal(object):
 
     def get_symmetry(self):
         if self.constructed:
-            spga = SpacegroupAnalyzer(self.structure, symprec=Crystal_Tol)
             try:
+                spga = SpacegroupAnalyzer(self.structure, symprec=Crystal_Tol)
                 self.real_spacegroup = spga.get_space_group_number()
             except Exception:
                 self.real_spacegroup = 1
@@ -496,7 +496,7 @@ def main(args):
                 recon_file_path)
             gt_crys = p_map(lambda x: Crystal(x), true_crystal_array_list)
         gen_evaluator = GenEval(
-            gen_crys, gt_crys, eval_model_name=eval_model_name)
+            gen_crys, gt_crys, eval_model_name=eval_model_name, n_samples=args.n_samples)
         gen_metrics = gen_evaluator.get_metrics()
         all_metrics.update(gen_metrics)
 
@@ -567,5 +567,6 @@ if __name__ == '__main__':
     parser.add_argument('--tasks', nargs='+', default=['csp', 'gen'])
     parser.add_argument('--gt_file',default='')
     parser.add_argument('--multi_eval',action='store_true')
+    parser.add_argument('--n_samples', type=int, default=1000)
     args = parser.parse_args()
     main(args)
