@@ -1,5 +1,5 @@
 expname: test
-runname: ${now:%Y-%m-%d}_${expname}
+runname: null
 wandb_dir: ${oc.env:WABDB_DIR}
 
 # metadata specialised for each experiment
