@@ -19,7 +19,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from torch_geometric.data import Data, Batch, DataLoader
 from torch.utils.data import Dataset
-from scripts.eval_utils import load_model, lattices_to_params_shape, get_crystals_list
 
 from pymatgen.core.structure import Structure
 from pymatgen.core.lattice import Lattice
@@ -32,6 +31,11 @@ from p_tqdm import p_map
 
 EPS = 1e-4*np.random.randn(3)
 POINT = np.array([0.5, 0.5, 0.5]) + EPS
+
+import sys
+sys.path.append('.')
+from scripts.eval_utils import load_model, lattices_to_params_shape, get_crystals_list
+
 
 train_dist = {
     'perov' : [0, 0, 0, 0, 0, 1],
