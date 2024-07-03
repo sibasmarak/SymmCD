@@ -10,7 +10,7 @@
 #SBATCH --output=mp_20_sweep_output/ab-initio-dummy-final-experiment-%A.%a.out
 
 module load anaconda/3
-conda activate diffcsp
+conda activate diffcsp39
 
 # To create a sweep use the corresp
 # wandb sweep --project diffcsp_symmetry -e symmetry_group hyperparam_sweep_diffcsp_dummy_repr.yaml

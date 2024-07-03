@@ -180,3 +180,5 @@ scripts/logs/
 *.out
 logs/*
 batch_run_eval.sh
+make_dataset.sh
+*.ipynb

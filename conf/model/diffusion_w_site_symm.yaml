@@ -13,6 +13,9 @@ use_ks: true
 use_gt_frac_coords: true
 use_site_symm: true
 mask_ss: false
+use_atom_weighting: false
+cached_sg_to_ss_path: /home/mila/s/siba-smarak.panigrahi/DiffCSP/diffcsp/pl_modules/cached_sg_to_site_symm.pt
+cached_sg_to_atoms_path: /home/mila/s/siba-smarak.panigrahi/DiffCSP/diffcsp/pl_modules/cached_sg_to_atoms.pt
 
 defaults:
   - decoder: cspnet

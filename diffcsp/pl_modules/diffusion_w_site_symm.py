@@ -37,6 +37,7 @@ SG_CONDITION_DIM = 397
 from scripts.generation import SampleDataset
 from scripts.compute_metrics import Crystal, GenEval, get_gt_crys_ori
 from scripts.eval_utils import lattices_to_params_shape, smact_validity, structure_validity, get_crystals_list
+import re
 
 
 def find_num_atoms(dummy_ind, total_num_atoms):
@@ -200,6 +201,7 @@ class CSPDiffusion(BaseModule):
         self.keep_coords = self.hparams.cost_coord < 1e-5
         self.use_ks = self.hparams.use_ks
         self.mask_ss = self.hparams.mask_ss
+        self.use_atom_weighting = self.hparams.use_atom_weighting
         if self.mask_ss:
             self.group_ss_mask = self.init_group_ss_mask()
 
@@ -312,9 +314,13 @@ class CSPDiffusion(BaseModule):
 
         # pass noised site symmetries and behave similar to atom type probs
         lattice_feats = input_ks if self.use_ks else input_lattice
-        pred_lattice, pred_x, pred_t, pred_symm = self.decoder(time_emb, atom_type_probs, input_frac_coords, 
-                                                    lattice_feats, input_lattice, batch.num_atoms, 
-                                                    batch.batch, site_symm_probs=site_symm_probs)
+        preds = self.decoder(time_emb, atom_type_probs, input_frac_coords, 
+                            lattice_feats, input_lattice, batch.num_atoms, 
+                            batch.batch, site_symm_probs=site_symm_probs)
+        if not self.use_atom_weighting:
+            pred_lattice, pred_x, pred_t, pred_symm  = preds
+        else:
+            pred_lattice, pred_x, pred_t, pred_symm, pred_gt_symm = preds
 
         tar_x = d_log_p_wrapped_normal(sigmas_per_atom * rand_x, sigmas_per_atom) / torch.sqrt(sigmas_norm_per_atom)
 
@@ -324,11 +330,36 @@ class CSPDiffusion(BaseModule):
         loss_coord = torch.mean(torch.sqrt(batch.x_loss_coeff) * F.mse_loss(pred_x, tar_x, reduction='none'))
         
         loss_type = F.mse_loss(pred_t, rand_t)
+            
+        weights = torch.ones_like(pred_symm)
+        # find the weights in case of atom weighting
+        if self.use_atom_weighting:
+            cached_sg_to_site_symm = torch.load(self.hparams.cached_sg_to_ss_path) # for each spacegroup, the combination of all site symmetries
+            cached_sg_to_atoms = torch.load(self.hparams.cached_sg_to_atoms_path) # for each spacegroup, the combination of all corresponding atoms
+            
+            weights = []
 
+            gt_site_symm, gt_atoms = [], []
+            for spacegroup_number, representative_atom_number in zip(batch.spacegroup, batch.num_atoms):
+                gt_ss = cached_sg_to_site_symm[spacegroup_number.item() - 1].to(self.device) # cached_sg_to_site_symm is a list
+                gt_ss = torch.repeat_interleave(gt_ss.unsqueeze(0), representative_atom_number, dim=0)
+                gt_site_symm.extend(gt_ss)
+                gt_atoms.extend(cached_sg_to_atoms[spacegroup_number.item() - 1].to(self.device))
+                
+            for batch_idx, (pred_gt_sym, gt_sym, gt_atom) in enumerate(zip(pred_gt_symm, gt_site_symm, gt_atoms)):
+                pred_gt_atom = torch.mean(F.softmax(F.cosine_similarity(pred_gt_sym, gt_sym, dim=-1), dim=0) * gt_atom)
+                gt_atom = batch.x_loss_coeff[batch_idx]
+                
+                weight = 1 + (pred_gt_atom - gt_atom) ** 2
+            
+                weights.append(weight)
+            # convert the list of weights to a tensor
+            weights = torch.stack(weights)[:, None]
+            
         if self.mask_ss:
-            loss_symm = F.mse_loss(batch_ss_mask * pred_symm, batch_ss_mask * rand_symm)
+            loss_symm = torch.mean(weights * F.mse_loss(batch_ss_mask * pred_symm, batch_ss_mask * rand_symm, reduction='none'))
         else:
-            loss_symm = F.mse_loss(pred_symm, rand_symm)
+            loss_symm = torch.mean(weights * F.mse_loss(pred_symm, rand_symm, reduction='none'))
 
         loss = (
             self.hparams.cost_lattice * loss_lattice +
@@ -440,9 +471,14 @@ class CSPDiffusion(BaseModule):
             std_x = torch.sqrt(2 * step_size)
 
             lattice_feats_t = k_t if self.use_ks else l_t
-            _, pred_x, _, _ = self.decoder(time_emb, t_t, x_t, 
-                                                  lattice_feats_t, l_t, batch.num_atoms, 
-                                                  batch.batch, site_symm_probs=symm_t)
+            preds = self.decoder(time_emb, t_t, x_t, 
+                            lattice_feats_t, l_t, batch.num_atoms, 
+                            batch.batch, site_symm_probs=symm_t)
+            
+            if not self.use_atom_weighting:
+                _, pred_x, _, _  = preds
+            else:
+                _, pred_x, _, _, _ = preds
 
             pred_x = pred_x * torch.sqrt(sigma_norm)
 
@@ -472,10 +508,15 @@ class CSPDiffusion(BaseModule):
             step_size = (sigma_x ** 2 - adjacent_sigma_x ** 2)
             std_x = torch.sqrt((adjacent_sigma_x ** 2 * (sigma_x ** 2 - adjacent_sigma_x ** 2)) / (sigma_x ** 2))   
             lattice_feats_t_minus_05 = k_t_minus_05 if self.use_ks else l_t_minus_05
-
-            pred_l, pred_x, pred_t, pred_symm = self.decoder(time_emb, t_t_minus_05, x_t_minus_05, 
-                                                        lattice_feats_t_minus_05, l_t_minus_05, batch.num_atoms, 
-                                                        batch.batch, site_symm_probs=symm_t_minus_05)
+            
+            preds = self.decoder(time_emb, t_t_minus_05, x_t_minus_05, 
+                            lattice_feats_t_minus_05, l_t_minus_05, batch.num_atoms, 
+                            batch.batch, site_symm_probs=symm_t_minus_05)
+            
+            if not self.use_atom_weighting:
+                pred_l, pred_x, pred_t, pred_symm  = preds
+            else:
+                pred_l, pred_x, pred_t, pred_symm, _ = preds
 
             pred_x = pred_x * torch.sqrt(sigma_norm)
 

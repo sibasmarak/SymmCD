@@ -30,9 +30,8 @@ import chemparse
 import numpy as np
 from p_tqdm import p_map
 
-import pdb
-
-import os
+EPS = 1e-4*np.random.randn(3)
+POINT = np.array([0.5, 0.5, 0.5]) + EPS
 
 train_dist = {
     'perov' : [0, 0, 0, 0, 0, 1],
@@ -143,15 +142,26 @@ class SampleDataset(Dataset):
             spacegroup = data_dict['spacegroup']
             # masking on the basis of identifiers of orbits in a crystal
             identifiers = data_dict['identifier']
-            # find a single representative for each identifier which can then mask
+            
             mask = np.zeros_like(identifiers)
 
-            # Process each unique identifier
+            # # Process each unique identifier
             for identifier in np.unique(identifiers):
                 # Find indices where this identifier occurs
                 indices = np.where(identifiers == identifier)[0]
-                # Randomly select one index and set it to 1 in the mask tensor
-                mask[indices[0]] = 1
+                # Get index closest to random point in center
+                min_index = ((frac_coords - POINT)**2).sum(1)[indices].argmin().item()
+                mask[indices[min_index]] = 1
+
+            # find a single representative for each identifier which can then mask
+            # mask = np.zeros_like(identifiers)
+
+            # # Process each unique identifier
+            # for identifier in np.unique(identifiers):
+            #     # Find indices where this identifier occurs
+            #     indices = np.where(identifiers == identifier)[0]
+            #     # Randomly select one index and set it to 1 in the mask tensor
+            #     mask[indices[0]] = 1
                 
             frac_coords = frac_coords[mask.astype(bool)]
             atom_types = atom_types[mask.astype(bool)]

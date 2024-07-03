@@ -4,8 +4,7 @@
 
 #### Recommended installation method
 It is recommended to install each necessary package (with appropriate versions mentioned in the `diffcsp39.yaml`) file following this order:  
-`pytorch`, `pytorch-lightning`, `pyg`, `pyxtal`, `pymatgen`, `matminer`, `einops`, `hydra-core`, `symd`.  
-Now run `diff_run.sh` if it throws some package error, please install those.
+`pytorch`, `pytorch-lightning`, `pyg`, `pyxtal`, `pymatgen`, `matminer`, `einops`, `hydra-core`, `symd`, `dotenv`, `wandb`,`p_tqdm`,`torch_scatter`, `torch_sparse`, `smact`,`chemparse`. Clone [`cdvae repo`](https://github.com/txie-93/cdvae) in the same directory level as `conf` and `data` and install it. Now run `diff_run.sh` if it throws some package error, please install those.  
 
 
 #### Other installation method
@@ -91,3 +90,10 @@ python scripts/compute_metrics --root_path <model_path> --tasks gen --gt_file da
 ```
 python scripts/sample.py --model_path <model_path> --save_path <save_path> --formula <formula> --num_evals <num_evals>
 ```
+
+
+#### How to run the sweep
+
+- Change/Add hyperparameters and their values in the `hyperparam_sweep.yaml` file.  
+- `wandb sweep --project diffcsp_symmetry -e symmetry_group hyperparam_sweep.yaml`.  
+- `wandb agent <above-agent-id>`.  

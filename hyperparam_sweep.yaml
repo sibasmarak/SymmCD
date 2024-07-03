@@ -27,13 +27,13 @@ parameters:
     model.ip:
       value: False
     model.beta_scheduler.nu_site_symm:
-      values: [0.5, 1, 1.5, 2.5]
+      value: 1
     model.beta_scheduler.nu_lattice:
-      values: [0.5, 1, 1.5, 2.5]
+      value: 1
     model.beta_scheduler.nu_atom:
-      values: [0.5, 1, 1.5, 2.5]
+      value: 1
     model.sigma_scheduler.sigma_end:
-      values: [0.5, 1.0]
+      value: 0.5
     model.use_gt_frac_coords:
       value: True
     model.decoder.num_freqs:
