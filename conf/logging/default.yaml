@@ -4,7 +4,7 @@ progress_bar_refresh_rate: 1
 
 wandb:
   # name: ${expname}
-  project: diffcsp
+  project: diffcsp_symmetry
   entity: symmetry_group
   name: ${runname}
   log_model: True

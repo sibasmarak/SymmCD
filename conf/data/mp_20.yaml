@@ -23,7 +23,7 @@ train_max_epochs: 1000
 early_stopping_patience: 100000
 teacher_forcing_max_epoch: 500
 
-eval_every_epoch: 500
+eval_every_epoch: 100
 eval_generate_samples: 100
 
 datamodule:
@@ -46,6 +46,7 @@ datamodule:
       use_random_representatives: ${data.use_random_representatives}
       lattice_scale_method: ${data.lattice_scale_method}
       preprocess_workers: ${data.preprocess_workers}
+      gt_prop_eval_path:  ${data.root_path}/train_${data.eval_model_name}_${data.prop}.pt
 
     val:
       - _target_: diffcsp.pl_data.dataset.CrystDataset
@@ -64,6 +65,7 @@ datamodule:
         use_random_representatives: ${data.use_random_representatives}
         lattice_scale_method: ${data.lattice_scale_method}
         preprocess_workers: ${data.preprocess_workers}
+        gt_prop_eval_path:  ${data.root_path}/val_${data.eval_model_name}_${data.prop}.pt
 
     test:
       - _target_: diffcsp.pl_data.dataset.CrystDataset
@@ -82,6 +84,7 @@ datamodule:
         use_random_representatives: ${data.use_random_representatives}
         lattice_scale_method: ${data.lattice_scale_method}
         preprocess_workers: ${data.preprocess_workers}
+        gt_prop_eval_path:  ${data.root_path}/test_${data.eval_model_name}_${data.prop}.pt
 
   num_workers:
     train: 0
@@ -89,6 +92,6 @@ datamodule:
     test: 0
 
   batch_size:
-    train: 256
-    val: 128
-    test: 128
+    train: 2048
+    val: 2048
+    test: 2048

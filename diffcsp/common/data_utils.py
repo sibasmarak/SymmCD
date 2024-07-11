@@ -7,6 +7,7 @@ import torch
 import copy
 import json
 import itertools
+import warnings
 import os
 
 from pymatgen.core.structure import Structure
@@ -329,14 +330,16 @@ def build_crystal_graph(crystal, graph_method='crystalnn'):
     """
     crystal.perturb(0.0001)
     if graph_method == 'crystalnn':
-        try:
-            crystal_graph = StructureGraph.with_local_env_strategy(
-                crystal, CrystalNN)
-        except:
-            # TODO: make it 10 for perov and 20 for mp20
-            crystalNN_tmp = local_env.CrystalNN(distance_cutoffs=None, x_diff_weight=-1, porous_adjustment=False, search_cutoff=20)
-            crystal_graph = StructureGraph.with_local_env_strategy(
-                crystal, crystalNN_tmp) 
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            try:
+                crystal_graph = StructureGraph.with_local_env_strategy(
+                    crystal, CrystalNN)
+            except:
+                # TODO: make it 10 for perov and 20 for mp20
+                crystalNN_tmp = local_env.CrystalNN(distance_cutoffs=None, x_diff_weight=-1, porous_adjustment=False, search_cutoff=20)
+                crystal_graph = StructureGraph.with_local_env_strategy(
+                    crystal, crystalNN_tmp) 
     elif graph_method == 'none':
         pass
     else:
@@ -413,7 +416,9 @@ def lattice_ks_to_matrix_torch(ks):
         ks: torch.Tensor of shape (N, 6)
     """
     S = torch.einsum('bij,nb->nij', torch.tensor(B_MATRICES, device=ks.device, dtype=ks.dtype), ks)
-    L = torch.matrix_exp(S)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        L = torch.matrix_exp(S)
     return L
 
 def lattice_params_to_matrix_torch(lengths, angles):

@@ -37,26 +37,35 @@ from scripts.compute_metrics import Crystal, GenEval, get_gt_crys_ori
 from scripts.eval_utils import lattices_to_params_shape,  get_crystals_list
 
 
-MAX_ATOMIC_NUM=100
+MAX_ATOMIC_NUM=94
 NUM_WYCKOFF = 186
 NUM_SPACEGROUPS = 231
 SITE_SYMM_AXES = 15
 SITE_SYMM_PGS = 13
 SITE_SYMM_DIM = SITE_SYMM_AXES * SITE_SYMM_PGS
 SG_CONDITION_DIM = 397
+SG_SYM = {spacegroup: Group(spacegroup) for spacegroup in range(1, 231)}
+SG_TO_WP_TO_SITE_SYMM = dict()
+for spacegroup in range(1, 231):
+    SG_TO_WP_TO_SITE_SYMM[spacegroup] = dict()
+    for wp in SG_SYM[spacegroup].Wyckoff_positions:
+        wp.get_site_symmetry()
+        SG_TO_WP_TO_SITE_SYMM[spacegroup][wp] = wp.get_site_symmetry_object().to_one_hot()
 
 class DiscreteNoise(nn.Module):
-    def __init__(self, atom_type_marginals, site_symm_marginals_per_sg, beta_scheduler):
+    def __init__(self, atom_type_prior, site_symm_prior_per_sg, beta_scheduler, P_ss, P_a):
         super().__init__()
         self.beta_scheduler = beta_scheduler
-        self.site_symm_marginals_per_sg = site_symm_marginals_per_sg
-        self.atom_type_marginals = atom_type_marginals
-
-        self.P_ss = nn.ParameterList([nn.Parameter(self.site_symm_marginals_per_sg[i].unsqueeze(-2).expand(NUM_SPACEGROUPS, SITE_SYMM_PGS, SITE_SYMM_PGS).clone(), requires_grad=False) for i in range(SITE_SYMM_AXES)])
-        self.P_a = nn.Parameter(atom_type_marginals.unsqueeze(0).expand(MAX_ATOMIC_NUM, -1).clone(), requires_grad=False)
+        self.site_symm_prior_per_sg = site_symm_prior_per_sg
+        self.atom_type_prior = atom_type_prior
+        self.P_ss = P_ss 
+        self.P_a = P_a 
+        self.site_symm_pgs = SITE_SYMM_PGS
+        self.site_symm_axes = SITE_SYMM_AXES
+        self.max_atomic_num = MAX_ATOMIC_NUM
 
     def ss_to_sections(self, ss):
-        return [ss[..., i*SITE_SYMM_PGS:(i+1)*SITE_SYMM_PGS] for i in range(SITE_SYMM_AXES)]
+        return [ss[..., i*SITE_SYMM_PGS:(i+1)*SITE_SYMM_PGS] for i in range(self.site_symm_axes)]
 
     def multiply_block_diagonal(self, Qs, d):
         '''
@@ -109,7 +118,7 @@ class DiscreteNoise(nn.Module):
         return prob_site_symms
 
     def sample_atom_types(self, atom_probs):
-        return F.one_hot(torch.multinomial(atom_probs, 1).reshape(-1), MAX_ATOMIC_NUM).float()
+        return F.one_hot(torch.multinomial(atom_probs, 1).reshape(-1), self.max_atomic_num).float()
 
     def sample_site_symms(self, site_symms):
         outs = []
@@ -122,13 +131,13 @@ class DiscreteNoise(nn.Module):
     def sample_limit_dist(self, node_mask, sgs):
         """ Sample from the limit distribution of the diffusion process"""
         bs, n_max = node_mask.shape
-        a_limit = self.atom_type_marginals.expand(bs, n_max, -1)
+        a_limit = self.atom_type_prior.expand(bs, n_max, -1)
         U_a = a_limit.flatten(end_dim=-2).multinomial(1).reshape(bs, n_max).to(node_mask.device)
         U_a = F.one_hot(U_a, num_classes=a_limit.shape[-1]).float()
         U_a = U_a * node_mask.unsqueeze(-1)
 
         U_ss_list = []
-        for ss_marginals_i_per_sg in self.site_symm_marginals_per_sg:
+        for ss_marginals_i_per_sg in self.site_symm_prior_per_sg:
             ss_marginals_i = ss_marginals_i_per_sg[sgs]
             ss_limit_i = ss_marginals_i.unsqueeze(-2).expand(bs, n_max, -1)
             U_ss_i = ss_limit_i.flatten(end_dim=-2).multinomial(1).reshape(bs, n_max).to(node_mask.device)
@@ -263,6 +272,29 @@ class DiscreteNoise(nn.Module):
         loss_ss = torch.stack(losses).mean()
         return loss_a, loss_ss
 
+class DiscreteNoiseMarginal(DiscreteNoise):
+    def __init__(self, data_root_path, beta_scheduler):
+        atom_type_prior = torch.load(data_root_path + '/train_atom_types_marginals.pt')
+        site_symm_prior_per_sg = torch.load(data_root_path + '/train_site_symm_marginals_per_sg.pt')
+        P_ss = nn.ParameterList([nn.Parameter(site_symm_prior_per_sg[i].unsqueeze(-2).expand(NUM_SPACEGROUPS, SITE_SYMM_PGS, SITE_SYMM_PGS).clone(), requires_grad=False) for i in range(SITE_SYMM_AXES)])
+        P_a = nn.Parameter(atom_type_prior.unsqueeze(0).expand(MAX_ATOMIC_NUM, -1).clone(), requires_grad=False)
+        super().__init__(atom_type_prior, site_symm_prior_per_sg, beta_scheduler, P_ss, P_a)
+
+
+class DiscreteNoiseMasked(DiscreteNoise):
+    def __init__(self, beta_scheduler):
+        atom_type_prior = torch.zeros(MAX_ATOMIC_NUM + 1)
+        atom_type_prior[-1] = 1
+        site_symm_prior = [torch.zeros(SITE_SYMM_PGS + 1) for i in range(SITE_SYMM_AXES)]
+        for i in range(SITE_SYMM_AXES):
+            site_symm_prior[i][-1] = 1
+        P_ss = nn.ParameterList([nn.Parameter(site_symm_prior[i].unsqueeze(-2).expand(NUM_SPACEGROUPS, SITE_SYMM_PGS+1, SITE_SYMM_PGS+1).clone(), requires_grad=False) for i in range(SITE_SYMM_AXES)])
+        P_a = nn.Parameter(atom_type_prior.unsqueeze(0).expand(MAX_ATOMIC_NUM+1, -1).clone(), requires_grad=False)
+        super().__init__(atom_type_prior, site_symm_prior, beta_scheduler, P_ss, P_a)
+        self.max_atomic_num = MAX_ATOMIC_NUM + 1
+        self.site_symm_pgs = SITE_SYMM_PGS + 1
+
+
 def find_num_atoms(dummy_ind, total_num_atoms):
     # num_atoms states how many atoms are there in each crystal (num_repr + dummy origin)
     actual_num_atoms = []
@@ -283,10 +315,7 @@ def modify_frac_coords_one(frac_coords, site_symm, atom_types, spacegroup):
     spacegroup = spacegroup.item()
     site_symm_axis = site_symm.reshape(-1, SITE_SYMM_AXES, SITE_SYMM_PGS).detach().cpu()
     # Get site symmetry of each WP for the spacegroup
-    wp_to_site_symm = dict()
-    for wp in Group(spacegroup).Wyckoff_positions:
-        wp.get_site_symmetry()
-        wp_to_site_symm[wp] = wp.get_site_symmetry_object().to_one_hot()
+    wp_to_site_symm = SG_TO_WP_TO_SITE_SYMM[spacegroup]
 
     # iterate over frac coords and corresponding site-symm
     new_frac_coords, new_atom_types, new_site_symm = [], [], []
@@ -302,7 +331,7 @@ def modify_frac_coords_one(frac_coords, site_symm, atom_types, spacegroup):
         closes = []
         for wp in closest_ss_wps:
             for orbit_index in range(len(wp.ops)):
-                close = search_cloest_wp(Group(spacegroup), wp, wp.ops[orbit_index], frac_coord)%1.
+                close = search_cloest_wp(SG_SYM[spacegroup], wp, wp.ops[orbit_index], frac_coord)%1.
                 closes.append((close, wp, orbit_index, np.linalg.norm(np.minimum((close - frac_coord)%1., (frac_coord - close)%1.))))
         try:
             # pick the nearest wp to project
@@ -414,7 +443,8 @@ class CSPDiffusion(BaseModule):
         
         # NOTE: set pred_site_symm_type to True to generate site symmetries also (set it to False to behave as DiffCSP)
         # pred_type is set to True to generate atom types
-        self.decoder = hydra.utils.instantiate(self.hparams.decoder, latent_dim = self.hparams.latent_dim + self.hparams.time_dim, pred_type = True, pred_site_symm_type = True, smooth = True, max_atoms=MAX_ATOMIC_NUM)
+        mask_token = 1 if self.hparams.prior == 'masked' else 0 
+        self.decoder = hydra.utils.instantiate(self.hparams.decoder, latent_dim = self.hparams.latent_dim + self.hparams.time_dim, pred_type = True, pred_site_symm_type = True, smooth = True, max_atoms=MAX_ATOMIC_NUM+mask_token, mask_token=mask_token)
         self.beta_scheduler = hydra.utils.instantiate(self.hparams.beta_scheduler).to(self.device)
         self.sigma_scheduler = hydra.utils.instantiate(self.hparams.sigma_scheduler).to(self.device)
         self.time_dim = self.hparams.time_dim
@@ -423,13 +453,14 @@ class CSPDiffusion(BaseModule):
         self.keep_lattice = self.hparams.cost_lattice < 1e-5
         self.keep_coords = self.hparams.cost_coord < 1e-5
         self.use_ks = self.hparams.use_ks
-        self.discrete_noise = self.init_discrete_noise()
+        self.discrete_noise = self.init_discrete_noise(self.hparams.prior)
 
 
-    def init_discrete_noise(self):
-        atom_type_marginals = torch.load(self.hparams.data.root_path + '/train_atom_types_marginals.pt')
-        site_symm_marginals = torch.load(self.hparams.data.root_path + '/train_site_symm_marginals_per_sg.pt')
-        return DiscreteNoise(atom_type_marginals, site_symm_marginals, self.beta_scheduler)
+    def init_discrete_noise(self, prior='marginal'):
+        if prior == 'marginal':
+            return DiscreteNoiseMarginal(self.hparams.data.root_path, self.beta_scheduler)
+        elif prior == 'masked':
+            return DiscreteNoiseMasked(self.beta_scheduler)
 
     def forward(self, batch):
 
@@ -474,7 +505,7 @@ class CSPDiffusion(BaseModule):
         sigmas_norm_per_atom = sigmas_norm.repeat_interleave(batch.num_atoms)[:, None]
         input_frac_coords = (frac_coords + sigmas_per_atom * rand_x) % 1.
 
-        gt_atom_types_onehot = F.one_hot(atom_types, num_classes=MAX_ATOMIC_NUM).float()
+        gt_atom_types_onehot = F.one_hot(atom_types, num_classes=self.discrete_noise.max_atomic_num).float()
         gt_site_symm_binary = site_symms
 
         atom_type_noised_probs = self.discrete_noise.apply_atom_noise(gt_atom_types_onehot, times)
@@ -677,7 +708,8 @@ class CSPDiffusion(BaseModule):
 
         # drop all dummy elements (atom types = MAX_ATOMIC_NUM)
         # NOTE: add breakpoint() here if you want to check (traj[0]['atom_types'].sum(dim=1) can give you sum of atom types values)
-        dummy_ind = (traj[0]['atom_types'].argmax(dim=-1) + 1 == MAX_ATOMIC_NUM).long()
+        #dummy_ind = (traj[0]['atom_types'].argmax(dim=-1) + 1 == self.discrete_noise.max_atomic_num).long()
+        dummy_ind = (traj[0]['atom_types'].argmax(dim=-1) == self.discrete_noise.max_atomic_num).long()
         traj[0]['frac_coords'] = traj[0]['frac_coords'][(1 - dummy_ind).bool()]
         traj[0]['atom_types'] = traj[0]['atom_types'][(1 - dummy_ind).bool()]
         traj[0]['site_symm'] = traj[0]['site_symm'][(1 - dummy_ind).bool()]
@@ -806,7 +838,8 @@ class CSPDiffusion(BaseModule):
             
         print(f"INFO: Done reading ground truth crystals (Epoch: {self.current_epoch + 1})")
         
-        gen_evaluator = GenEval(gen_crys, gt_crys, n_samples=0, eval_model_name=self.hparams.data.eval_model_name)
+        gen_evaluator = GenEval(gen_crys, gt_crys, n_samples=0, eval_model_name=self.hparams.data.eval_model_name,
+                                gt_prop_eval_path=self.hparams.data.datamodule.datasets.val[0].gt_prop_eval_path)
         gen_metrics = gen_evaluator.get_metrics()
         print(gen_metrics)
         

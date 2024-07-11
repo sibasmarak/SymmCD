@@ -5,7 +5,7 @@ import hydra
 
 from scipy.spatial.distance import pdist
 from scipy.spatial.distance import cdist
-from hydra.experimental import compose
+from hydra import compose
 from hydra import initialize_config_dir
 
 from pathlib import Path

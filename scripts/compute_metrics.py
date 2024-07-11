@@ -2,13 +2,14 @@ from collections import Counter
 import argparse
 import os
 import json
-
+import warnings
 import numpy as np
 from pathlib import Path
 from tqdm import tqdm
 from p_tqdm import p_map, p_umap
 from scipy.stats import wasserstein_distance
 import pandas as pd
+import torch
 
 from pymatgen.core.structure import Structure
 from pymatgen.core.composition import Composition
@@ -24,7 +25,7 @@ import pickle
 
 import sys
 sys.path.append('.')
-
+warnings.simplefilter("ignore")
 from scripts.eval_utils import (
     smact_validity, structure_validity, CompScaler, get_fp_pdist,
     load_config, load_data, get_crystals_list, prop_model_eval, compute_cov)
@@ -318,11 +319,12 @@ class RecEvalBatch(object):
 
 class GenEval(object):
 
-    def __init__(self, pred_crys, gt_crys, n_samples=1000, eval_model_name=None):
+    def __init__(self, pred_crys, gt_crys, n_samples=1000, eval_model_name=None, gt_prop_eval_path=None):
         self.crys = pred_crys
         self.gt_crys = gt_crys
         self.n_samples = n_samples
         self.eval_model_name = eval_model_name
+        self.gt_prop_eval_path = gt_prop_eval_path
 
         valid_crys = [c for c in pred_crys if c.valid]
         if n_samples == 0:
@@ -363,8 +365,12 @@ class GenEval(object):
         if self.eval_model_name is not None:
             pred_props = prop_model_eval(self.eval_model_name, [
                                          c.dict for c in self.valid_samples])
-            gt_props = prop_model_eval(self.eval_model_name, [
-                                       c.dict for c in self.gt_crys])
+            if self.gt_prop_eval_path is not None and os.path.exists(self.gt_prop_eval_path):
+                gt_props = torch.load(self.gt_prop_eval_path)
+            else:
+                gt_props = prop_model_eval(self.eval_model_name, [
+                                           c.dict for c in self.gt_crys])
+                torch.save(gt_props, self.gt_prop_eval_path)
             wdist_prop = wasserstein_distance(pred_props, gt_props)
             return {'wdist_prop': wdist_prop}
         else:
