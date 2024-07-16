@@ -455,6 +455,18 @@ class CSPDiffusion(BaseModule):
         self.use_ks = self.hparams.use_ks
         self.discrete_noise = self.init_discrete_noise(self.hparams.prior)
 
+    def on_train_start(self):
+        log_dict = {
+            'comp_valid': 0,
+            'struct_valid': 0,
+            'valid': 0
+        }
+        self.log_dict(
+            log_dict,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=False,
+        )
 
     def init_discrete_noise(self, prior='marginal'):
         if prior == 'marginal':

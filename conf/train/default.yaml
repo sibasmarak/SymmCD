@@ -18,8 +18,8 @@ pl_trainer:
   gradient_clip_algorithm: value
   profiler: simple
 
-monitor_metric: 'val_loss'
-monitor_metric_mode: 'min'
+monitor_metric: 'valid'
+monitor_metric_mode: 'max'
 
 early_stopping:
   patience: ${data.early_stopping_patience} # 60
@@ -28,4 +28,4 @@ early_stopping:
 model_checkpoints:
   save_top_k: 1
   verbose: False
-  save_last: False
+  save_last: True
