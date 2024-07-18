@@ -65,7 +65,7 @@ class DiscreteNoise(nn.Module):
         self.max_atomic_num = MAX_ATOMIC_NUM
 
     def ss_to_sections(self, ss):
-        return [ss[..., i*SITE_SYMM_PGS:(i+1)*SITE_SYMM_PGS] for i in range(self.site_symm_axes)]
+        return [ss[..., i*self.site_symm_pgs:(i+1)*self.site_symm_pgs] for i in range(self.site_symm_axes)]
 
     def multiply_block_diagonal(self, Qs, d):
         '''
@@ -137,9 +137,9 @@ class DiscreteNoise(nn.Module):
         U_a = U_a * node_mask.unsqueeze(-1)
 
         U_ss_list = []
-        for ss_marginals_i_per_sg in self.site_symm_prior_per_sg:
-            ss_marginals_i = ss_marginals_i_per_sg[sgs]
-            ss_limit_i = ss_marginals_i.unsqueeze(-2).expand(bs, n_max, -1)
+        for ss_priors_i_per_sg in self.site_symm_prior_per_sg:
+            ss_priors_i = ss_priors_i_per_sg[sgs]
+            ss_limit_i = ss_priors_i.unsqueeze(-2).expand(bs, n_max, -1)
             U_ss_i = ss_limit_i.flatten(end_dim=-2).multinomial(1).reshape(bs, n_max).to(node_mask.device)
             U_ss_i = F.one_hot(U_ss_i, num_classes=ss_limit_i.shape[-1]).float()
             U_ss_list.append(U_ss_i)
@@ -170,7 +170,7 @@ class DiscreteNoise(nn.Module):
         for i in range(SITE_SYMM_AXES):
             prob_ss_i = prob_ss_list[i].reshape(bs * n, -1)       # (bs * n, dx_out)
             site_symm_t_i_cat = prob_ss_i.multinomial(1).reshape(bs, n)
-            site_symm_t_i =  F.one_hot(site_symm_t_i_cat, num_classes=SITE_SYMM_PGS).float()
+            site_symm_t_i =  F.one_hot(site_symm_t_i_cat, num_classes=self.site_symm_pgs).float()
             site_symm_t_list.append(site_symm_t_i)
         site_symm_t = torch.cat(site_symm_t_list, -1)
 
@@ -288,12 +288,12 @@ class DiscreteNoiseMasked(DiscreteNoise):
         site_symm_prior = [torch.zeros(SITE_SYMM_PGS + 1) for i in range(SITE_SYMM_AXES)]
         for i in range(SITE_SYMM_AXES):
             site_symm_prior[i][-1] = 1
+        site_symm_prior_per_sg = [site_symm_prior_i.expand(NUM_SPACEGROUPS, -1) for site_symm_prior_i in site_symm_prior]
         P_ss = nn.ParameterList([nn.Parameter(site_symm_prior[i].unsqueeze(-2).expand(NUM_SPACEGROUPS, SITE_SYMM_PGS+1, SITE_SYMM_PGS+1).clone(), requires_grad=False) for i in range(SITE_SYMM_AXES)])
         P_a = nn.Parameter(atom_type_prior.unsqueeze(0).expand(MAX_ATOMIC_NUM+1, -1).clone(), requires_grad=False)
-        super().__init__(atom_type_prior, site_symm_prior, beta_scheduler, P_ss, P_a)
+        super().__init__(atom_type_prior, site_symm_prior_per_sg, beta_scheduler, P_ss, P_a)
         self.max_atomic_num = MAX_ATOMIC_NUM + 1
         self.site_symm_pgs = SITE_SYMM_PGS + 1
-
 
 def find_num_atoms(dummy_ind, total_num_atoms):
     # num_atoms states how many atoms are there in each crystal (num_repr + dummy origin)
@@ -479,7 +479,11 @@ class CSPDiffusion(BaseModule):
         batch_size = batch.num_graphs
         dummy_repr_ind = batch.dummy_repr_ind
         atom_types, node_mask = to_dense_batch(batch.atom_types - 1, batch.batch, fill_value=0)
-        site_symms, node_mask = to_dense_batch(batch.site_symm.flatten(-2,-1), batch.batch, fill_value=0)
+        if self.hparams.prior == 'masked':
+            site_symm = torch.cat([batch.site_symm, torch.zeros_like(batch.site_symm)[..., :1]], dim=-1)
+        else:
+            site_symm = batch.site_symm
+        site_symms, node_mask = to_dense_batch(site_symm.flatten(-2, -1), batch.batch, fill_value=0)
         gt_spacegroup_onehot = F.one_hot(batch.spacegroup - 1, num_classes=N_SPACEGROUPS).float()
         times = self.beta_scheduler.uniform_sample_t(batch_size, self.device)
         time_emb = self.time_embedding(times) + self.spacegroup_embedding(gt_spacegroup_onehot)
@@ -725,7 +729,9 @@ class CSPDiffusion(BaseModule):
         traj[0]['frac_coords'] = traj[0]['frac_coords'][(1 - dummy_ind).bool()]
         traj[0]['atom_types'] = traj[0]['atom_types'][(1 - dummy_ind).bool()]
         traj[0]['site_symm'] = traj[0]['site_symm'][(1 - dummy_ind).bool()]
-        
+        if self.hparams.prior == 'masked':
+            # Get rid of masking dimension
+            traj[0]['site_symm'] = traj[0]['site_symm'].reshape(-1, SITE_SYMM_AXES, self.discrete_noise.site_symm_pgs)[..., :SITE_SYMM_PGS].flatten(-2, -1)
         # find for each crystal how many non-dummy atoms are there
         traj[0]['num_atoms'] = find_num_atoms(dummy_ind, batch.num_atoms).to(self.device)
         # remove lattices and ks for empty crystals corresponding to num_atoms = 0
