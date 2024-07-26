@@ -163,7 +163,7 @@ class CSPNet(nn.Module):
             self.dis_emb = None
         if self.use_gt_frac_coords and self.dis_emb:
             frac_coord_dim = self.dis_emb.dim
-        self.atom_latent_emb = nn.Linear(hidden_dim + latent_dim + (latent_dim if self.use_site_symm else 0) + frac_coord_dim, hidden_dim)
+        self.atom_latent_emb = nn.Linear(hidden_dim + 2*latent_dim + (latent_dim if self.use_site_symm else 0) + frac_coord_dim, hidden_dim)
         for i in range(0, num_layers):
             if network == 'gnn':
                 self.add_module(

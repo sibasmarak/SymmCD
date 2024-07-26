@@ -67,6 +67,9 @@ class DiscreteNoise(nn.Module):
     def ss_to_sections(self, ss):
         return [ss[..., i*self.site_symm_pgs:(i+1)*self.site_symm_pgs] for i in range(self.site_symm_axes)]
 
+    def reshape_ss(self, ss):
+        return ss.reshape(-1, SITE_SYMM_AXES, self.site_symm_pgs) 
+
     def multiply_block_diagonal(self, Qs, d):
         '''
         Multiply each matrix Qi in Qs with the corresponding block of d
@@ -230,14 +233,13 @@ class DiscreteNoise(nn.Module):
         #Qt_ss = self.q_t_ss(t)
 
         # Normalize predictions for the categorical features
-        pred_a = F.softmax(pred_a, dim=-1)               # bs, n, d0
-        pred_ss = F.softmax(pred_ss, dim=-1)              # bs, n, d0
         z_t_ss_split = self.ss_to_sections(z_t_ss)
         p_s_and_t_given_0_atom_types = self.p_s_and_t_given_0_a(z_t_a, t, s)
         p_s_and_t_given_0_site_symms = self.p_s_and_t_given_0_ss(z_t_ss_split, t, s, sgs)
 
 
         # Dim of these two tensors: bs, N, d0, d_t-1
+        #pred_a = F.softmax(pred_a, dim=-1)               # bs, n, d0
         weighted_a = pred_a.unsqueeze(-1) * p_s_and_t_given_0_atom_types         # bs, n, d0, d_t-1
         unnormalized_prob_a = weighted_a.sum(dim=2)                     # bs, n, d_t-1
         unnormalized_prob_a[torch.sum(unnormalized_prob_a, dim=-1) == 0] = 1e-5
@@ -246,6 +248,7 @@ class DiscreteNoise(nn.Module):
         pred_ss_split = self.ss_to_sections(pred_ss)
         prob_ss_list = []
         for pred_ss_i, p_s_and_t_given_0_site_symms_i in zip(pred_ss_split, p_s_and_t_given_0_site_symms):
+            #pred_ss_i = F.softmax(pred_ss_i, dim=-1)              # bs, n, d0
             weighted_ss = pred_ss_i.unsqueeze(-1) * p_s_and_t_given_0_site_symms_i         # bs, n, d0, d_t-1
             unnormalized_prob_ss = weighted_ss.sum(dim=2)                     # bs, n, d_t-1
             unnormalized_prob_ss[torch.sum(unnormalized_prob_ss, dim=-1) == 0] = 1e-5
@@ -263,11 +266,11 @@ class DiscreteNoise(nn.Module):
         '''
         Cross entropy loss for atom_types as well as each site_symm component
         '''
-        loss_a = F.cross_entropy(pred_a, sample_a)
+        loss_a = F.nll_loss(torch.log(pred_a + 1e-20), sample_a)
         pred_ss_split = self.ss_to_sections(pred_ss)
         losses = []
         for i, pred_ss_i in enumerate(pred_ss_split):
-            loss_ss_i = F.cross_entropy(pred_ss_i, sample_ss[..., i])
+            loss_ss_i = F.nll_loss(torch.log(pred_ss_i +  1e-20), sample_ss[..., i])
             losses.append(loss_ss_i)
         loss_ss = torch.stack(losses).mean()
         return loss_a, loss_ss
@@ -294,6 +297,26 @@ class DiscreteNoiseMasked(DiscreteNoise):
         super().__init__(atom_type_prior, site_symm_prior_per_sg, beta_scheduler, P_ss, P_a)
         self.max_atomic_num = MAX_ATOMIC_NUM + 1
         self.site_symm_pgs = SITE_SYMM_PGS + 1
+
+    def sub_predictions(self, pred_a, pred_ss, atom_types, site_symms):
+        # return pred_a, pred_ss
+        # Modify atom and site symmetry predictions to account for masked tokens
+
+        # Never predict masked tokens – zero them out
+        mask_mask_atom = torch.zeros_like(pred_a) + 1
+        mask_mask_atom[:, -1] = 0
+        pred_a = pred_a * mask_mask_atom
+        mask_mask_symm = torch.zeros_like(pred_ss) + 1
+        self.reshape_ss(mask_mask_symm)[:,:,-1] = 0
+        pred_ss = pred_ss * mask_mask_symm
+
+        # If something is unmasked, keep it unmasked instead of predicting
+        unmasked_atom = (atom_types[..., -1] == 0)[:,None].expand(-1, self.max_atomic_num)
+        pred_a = torch.where(unmasked_atom, atom_types, pred_a)
+        unmasked_symm = ((self.reshape_ss(site_symms)[:, :, -1] == 0)[:,:,None].expand(-1, -1, self.site_symm_pgs)).flatten(-2, -1)
+        pred_ss = torch.where(unmasked_symm, site_symms, pred_ss)
+
+        return pred_a, pred_ss
 
 def find_num_atoms(dummy_ind, total_num_atoms):
     # num_atoms states how many atoms are there in each crystal (num_repr + dummy origin)
@@ -486,7 +509,7 @@ class CSPDiffusion(BaseModule):
         site_symms, node_mask = to_dense_batch(site_symm.flatten(-2, -1), batch.batch, fill_value=0)
         gt_spacegroup_onehot = F.one_hot(batch.spacegroup - 1, num_classes=N_SPACEGROUPS).float()
         times = self.beta_scheduler.uniform_sample_t(batch_size, self.device)
-        time_emb = self.time_embedding(times) + self.spacegroup_embedding(gt_spacegroup_onehot)
+        time_emb = torch.cat([self.time_embedding(times), self.spacegroup_embedding(gt_spacegroup_onehot)], dim=-1)
 
         alphas_cumprod = self.beta_scheduler.alphas_cumprod[times]
 
@@ -537,23 +560,24 @@ class CSPDiffusion(BaseModule):
 
         # pass noised site symmetries and behave similar to atom type probs
         lattice_feats = input_ks if self.use_ks else input_lattice
-        pred_lattice, pred_x, pred_t, pred_symm = self.decoder(time_emb, atom_types_noised[node_mask], input_frac_coords, 
+        symm_t = site_symms_noised[node_mask]
+        atom_types_t = atom_types_noised[node_mask]
+        pred_lattice, pred_x, pred_t_logit, pred_symm_logit = self.decoder(time_emb, atom_types_t, input_frac_coords, 
                                                     lattice_feats, input_lattice, batch.num_atoms, 
-                                                    batch.batch, site_symm_probs=site_symms_noised[node_mask])
+                                                    batch.batch, site_symm_probs=symm_t)
+        
+        pred_t = F.softmax(pred_t_logit, -1)
+        pred_symm = F.softmax(self.discrete_noise.reshape_ss(pred_symm_logit), -1).flatten(-2, -1)
+        if self.hparams.prior == 'masked':
+            pred_t, pred_symm = self.discrete_noise.sub_predictions(pred_t, pred_symm, atom_types_t, symm_t)
 
         tar_x = d_log_p_wrapped_normal(sigmas_per_atom * rand_x, sigmas_per_atom) / torch.sqrt(sigmas_norm_per_atom)
 
         
         loss_lattice = F.mse_loss(pred_lattice, ks_mask * rand_ks) if self.use_ks else F.mse_loss(pred_lattice, rand_l)
 
-        # loss_coord = F.mse_loss(pred_x * (1 - dummy_repr_ind), tar_x * (1 - dummy_repr_ind))
         loss_coord = F.mse_loss(pred_x, tar_x)
         
-        #loss_type = F.cross_entropy(pred_t, batch.atom_types)
-        
-        # loss_symm = F.mse_loss(pred_symm * (1 - dummy_repr_ind), rand_symm * (1 - dummy_repr_ind))
-        #loss_symm = F.mse_loss(pred_symm, rand_symm)
-
         loss_type, loss_symm = self.discrete_noise.discrete_loss(batch.atom_types - 1, batch.site_symm.argmax(-1), pred_t, pred_symm)
 
         loss = (
@@ -612,8 +636,8 @@ class CSPDiffusion(BaseModule):
 
             # get diffusion timestep embeddings, concatenated with spacegroup condition    
             gt_spacegroup_onehot = F.one_hot(batch.spacegroup - 1, num_classes=N_SPACEGROUPS).float()
-            time_emb = self.time_embedding(times) + self.spacegroup_embedding(gt_spacegroup_onehot)
-            
+            time_emb = torch.cat([self.time_embedding(times), self.spacegroup_embedding(gt_spacegroup_onehot)], dim=-1)
+
             alphas = self.beta_scheduler.alphas[t]
             alphas_cumprod = self.beta_scheduler.alphas_cumprod[t]
 
@@ -677,12 +701,18 @@ class CSPDiffusion(BaseModule):
             std_x = torch.sqrt((adjacent_sigma_x ** 2 * (sigma_x ** 2 - adjacent_sigma_x ** 2)) / (sigma_x ** 2))   
             lattice_feats_t_minus_05 = k_t_minus_05 if self.use_ks else l_t_minus_05
 
-            pred_l, pred_x, pred_t, pred_symm = self.decoder(time_emb, t_t_minus_05, x_t_minus_05, 
+            pred_l, pred_x, pred_t_logit, pred_symm_logit = self.decoder(time_emb, t_t_minus_05, x_t_minus_05, 
                                                         lattice_feats_t_minus_05, l_t_minus_05, batch.num_atoms, 
                                                         batch.batch, site_symm_probs=symm_t_minus_05)
+
+            # Convert logits to probabilities
+            pred_t = F.softmax(pred_t_logit, -1)
+            pred_symm = F.softmax(self.discrete_noise.reshape_ss(pred_symm_logit), -1).flatten(-2, -1)
+            if self.hparams.prior == 'masked':
+                pred_t, pred_symm = self.discrete_noise.sub_predictions(pred_t, pred_symm, t_t_minus_05, symm_t_minus_05)
+
             pred_t, _ = to_dense_batch(pred_t, batch.batch, fill_value=0)
             pred_symm, _ = to_dense_batch(pred_symm, batch.batch, fill_value=0)
-
             pred_x = pred_x * torch.sqrt(sigma_norm)
 
             x_t_minus_1 = x_t_minus_05 - step_size * pred_x + std_x * rand_x if not self.keep_coords else x_t

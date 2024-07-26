@@ -71,7 +71,10 @@ class Crystal(object):
         self.atom_types = crys_array_dict['atom_types']
         self.lengths = crys_array_dict['lengths']
         self.angles = crys_array_dict['angles']
-        self.spacegroup = crys_array_dict['spacegroups']
+        if 'spacegroups' in crys_array_dict:
+            self.spacegroup = crys_array_dict['spacegroups']
+        else:
+            self.spacegroup = None
         
         # check for NaN values 
         if np.isnan(self.lengths).any() or np.isinf(self.lengths).any():
@@ -377,7 +380,7 @@ class GenEval(object):
             return {'wdist_prop': None}
 
     def get_spacegroup_wdist(self):
-        pred_spacegroup = [c.spacegroup for c in self.valid_samples]
+        pred_spacegroup = [c.real_spacegroup for c in self.valid_samples]
         gt_spacegroup = [c.spacegroup for c in self.gt_crys]
         wdist_spacegroup = wasserstein_distance(pred_spacegroup, gt_spacegroup)
         return {'wdist_spacegroup': wdist_spacegroup}
@@ -433,16 +436,17 @@ def get_crystal_array_list(file_path, batch_idx=0):
                 data['num_atoms'][i])
             crys_array_list.append(tmp_crys_array_list)
     elif batch_idx == -2:
+        kwargs = dict()
+        if 'spacegroups' in data and 'site_symmetries' in data:
+            kwargs['spacegroups'] = data['spacegroups']
+            kwargs['site_symmetries'] = data['site_symmetries']
         crys_array_list = get_crystals_list(
             data['frac_coords'],
             data['atom_types'],
             data['lengths'],
             data['angles'],
             data['num_atoms'],
-            **{
-                'spacegroups': data['spacegroups'],
-                'site_symmetries': data['site_symmetries']
-            })        
+            **kwargs)        
     else:
         crys_array_list = get_crystals_list(
             data['frac_coords'][batch_idx],
