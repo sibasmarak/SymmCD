@@ -101,6 +101,30 @@ class CSPLayer(nn.Module):
         node_output = self.node_model(node_features, edge_features, edge_index)
         return node_input + node_output
 
+class TransformerLayer(nn.Module):
+    def __init__(self, hidden_dim=128, heads=8, ln=True, concat=True, dis_emb=None, act_fn=nn.SiLU()):
+        super(TransformerLayer, self).__init__()
+        self.dis_dim = 3
+        self.dis_emb = dis_emb
+        self.lattice_dim = 6
+        self.ln = ln
+        self.conv = TransformerConv(hidden_dim + self.lattice_dim + self.dis_dim, out_channels=hidden_dim, heads=heads, concat=concat, edge_dim=dis_emb.dim)
+        self.act_fn = act_fn
+        if self.ln:
+            self.layer_norm = nn.LayerNorm(hidden_dim)
+
+    def forward(self, node_features, frac_coords, lattice_feats, edge_index, node2graph, frac_diff = None):
+        torch.use_deterministic_algorithms(False) # NOTE: see if this is necessary later
+        edge_features = self.dis_emb(frac_diff)
+        node_input = node_features
+        if self.ln:
+            node_features = self.layer_norm(node_input)
+        lattice_feats_flatten = lattice_feats.view(-1, self.lattice_dim)
+        lattice_feats_flatten_nodes = lattice_feats_flatten[node2graph]
+        node_features = torch.cat([node_features, lattice_feats_flatten_nodes, frac_coords], dim=1)
+        node_output = self.act_fn(self.conv(node_features, edge_index, edge_features))
+        return node_input + node_output
+
 
 class CSPNet(nn.Module):
 
@@ -171,7 +195,7 @@ class CSPNet(nn.Module):
                 )  
             elif network == 'transformer':
                 self.add_module(
-                    "csp_layer_%d" % i, TransformerConv(in_channels=hidden_dim, out_channels=hidden_dim, heads=6, concat=False)
+                    "csp_layer_%d" % i, TransformerLayer(hidden_dim, heads=8, concat=False, ln=ln, dis_emb=self.dis_emb, act_fn=self.act_fn)
                 )   
         self.network = network       
         self.num_layers = num_layers
@@ -333,7 +357,7 @@ class CSPNet(nn.Module):
 
         for i in range(0, self.num_layers):
             if self.network == 'transformer':
-                node_features = self._modules["csp_layer_%d" % i](node_features, edges)
+                node_features = self._modules["csp_layer_%d" % i](node_features, frac_coords, lattice_feats, edges, node2graph, frac_diff = frac_diff)
             elif self.network == 'gnn':
                 node_features = self._modules["csp_layer_%d" % i](node_features, frac_coords, lattice_feats, edges, edge2graph, frac_diff = frac_diff)
 

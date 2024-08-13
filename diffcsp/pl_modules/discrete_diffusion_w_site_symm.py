@@ -472,7 +472,7 @@ class CSPDiffusion(BaseModule):
         self.sigma_scheduler = hydra.utils.instantiate(self.hparams.sigma_scheduler).to(self.device)
         self.time_dim = self.hparams.time_dim
         self.time_embedding = SinusoidalTimeEmbeddings(self.time_dim)
-        self.spacegroup_embedding = build_mlp(in_dim=N_SPACEGROUPS, hidden_dim=128, fc_num_layers=2, out_dim=self.time_dim)
+        self.spacegroup_embedding = build_mlp(in_dim=SG_CONDITION_DIM, hidden_dim=128, fc_num_layers=2, out_dim=self.time_dim)
         self.keep_lattice = self.hparams.cost_lattice < 1e-5
         self.keep_coords = self.hparams.cost_coord < 1e-5
         self.use_ks = self.hparams.use_ks
@@ -509,8 +509,7 @@ class CSPDiffusion(BaseModule):
         site_symms, node_mask = to_dense_batch(site_symm.flatten(-2, -1), batch.batch, fill_value=0)
         gt_spacegroup_onehot = F.one_hot(batch.spacegroup - 1, num_classes=N_SPACEGROUPS).float()
         times = self.beta_scheduler.uniform_sample_t(batch_size, self.device)
-        time_emb = torch.cat([self.time_embedding(times), self.spacegroup_embedding(gt_spacegroup_onehot)], dim=-1)
-
+        time_emb = torch.cat([self.time_embedding(times), self.spacegroup_embedding(batch.sg_condition.reshape(-1, SG_CONDITION_DIM))], dim=-1)
         alphas_cumprod = self.beta_scheduler.alphas_cumprod[times]
 
         c0 = torch.sqrt(alphas_cumprod)
@@ -635,8 +634,9 @@ class CSPDiffusion(BaseModule):
             times = torch.full((batch_size, ), t, device = self.device)
 
             # get diffusion timestep embeddings, concatenated with spacegroup condition    
-            gt_spacegroup_onehot = F.one_hot(batch.spacegroup - 1, num_classes=N_SPACEGROUPS).float()
-            time_emb = torch.cat([self.time_embedding(times), self.spacegroup_embedding(gt_spacegroup_onehot)], dim=-1)
+            #gt_spacegroup_onehot = F.one_hot(batch.spacegroup - 1, num_classes=N_SPACEGROUPS).float()
+            #time_emb = torch.cat([self.time_embedding(times), self.spacegroup_embedding(gt_spacegroup_onehot)], dim=-1)
+            time_emb = torch.cat([self.time_embedding(times), self.spacegroup_embedding(batch.sg_condition.reshape(-1, SG_CONDITION_DIM))], dim=-1)
 
             alphas = self.beta_scheduler.alphas[t]
             alphas_cumprod = self.beta_scheduler.alphas_cumprod[t]
