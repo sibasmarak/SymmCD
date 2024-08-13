@@ -19,6 +19,10 @@ from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 from matminer.featurizers.site.fingerprint import CrystalNNFingerprint
 from matminer.featurizers.composition.composite import ElementProperty
 
+import sys
+sys.path.append('.')
+
+from diffcsp.common.data_utils import build_crystal, get_symmetry_info
 from pyxtal import pyxtal
 
 import pickle
@@ -482,6 +486,20 @@ def get_gt_crys_ori(cif):
         'angles': np.array(lattice.angles),
         'spacegroups': spacegroup
     }
+    return Crystal(crys_array_dict)
+
+def get_gt_crys_ori_conventional(cif):
+    crystal = build_crystal(cif)
+    crystal, sym_info, dummy_repr_ind, dummy_origin_ind, identifier = get_symmetry_info(crystal, tol=0.01, num_repr=0)
+    spacegroup = sym_info['spacegroup']
+    lattice = crystal.lattice
+    crys_array_dict = {
+        'frac_coords':crystal.frac_coords,
+        'atom_types':np.array([_.Z for _ in crystal.species]),
+        'lengths': np.array(lattice.abc),
+        'angles': np.array(lattice.angles),
+        'spacegroups': spacegroup
+    }
     return Crystal(crys_array_dict) 
 
 def main(args):
@@ -494,10 +512,12 @@ def main(args):
 
         gen_file_path = get_file_paths(args.root_path, 'gen', args.label)
         crys_array_list, _ = get_crystal_array_list(gen_file_path, batch_idx = -2)
-        gen_crys = p_umap(lambda x: Crystal(x), crys_array_list)
         if args.gt_file != '':
             csv = pd.read_csv(args.gt_file)
-            gt_crys = p_map(get_gt_crys_ori, csv['cif'])
+            if args.conventional:
+                gt_crys = p_map(get_gt_crys_ori_conventional, csv['cif'])
+            else:
+                gt_crys = p_map(get_gt_crys_ori, csv['cif'])
         else:
             # always ground gt_file is provided
             # if not provided then only use the reconstruction path to load true crystals
@@ -505,6 +525,9 @@ def main(args):
             _, true_crystal_array_list = get_crystal_array_list(
                 recon_file_path)
             gt_crys = p_map(lambda x: Crystal(x), true_crystal_array_list)
+
+        gen_crys = p_umap(lambda x: Crystal(x), crys_array_list)
+
         gen_evaluator = GenEval(
             gen_crys, gt_crys, eval_model_name=eval_model_name, n_samples=args.n_samples,
             gt_prop_eval_path=cfg.data.datamodule.datasets.val[0].gt_prop_eval_path)
@@ -579,5 +602,7 @@ if __name__ == '__main__':
     parser.add_argument('--gt_file',default='')
     parser.add_argument('--multi_eval',action='store_true')
     parser.add_argument('--n_samples', type=int, default=1000)
+    parser.add_argument('--conventional', type=bool, default=False,
+                        help='whether to use the conventional lattice instead of the primitive lattice')
     args = parser.parse_args()
     main(args)

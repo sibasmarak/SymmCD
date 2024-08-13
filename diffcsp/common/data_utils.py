@@ -239,7 +239,7 @@ def get_wyckoff_symbol_from_binary_repr(binary_repr:torch.tensor, spacegroup_num
 
 
 
-def get_symmetry_info(crystal, tol=0.01, num_repr=10, use_random_repr=False):
+def get_symmetry_info(crystal, tol=0.01, num_repr=0, use_random_repr=False):
     spga = SpacegroupAnalyzer(crystal, symprec=tol)
     # NOTE: this converts [x,0,0.5] -> [0, 0.5, x] (or the canonical form)
     # basically diffusion model learns the distribution of this refined structure and not the original structure
@@ -1324,7 +1324,7 @@ def get_scaler_from_data_list(data_list, key):
     return scaler
 
 
-def process_one(row, niggli, primitive, graph_method, prop_list, use_space_group = False, tol=0.01, num_repr=10, use_random_repr=False):
+def process_one(row, niggli, primitive, graph_method, prop_list, use_space_group = False, tol=0.01, num_repr=0, use_random_repr=False):
     crystal_str = row['cif']
     crystal = build_crystal(
         crystal_str, niggli=niggli, primitive=primitive)
