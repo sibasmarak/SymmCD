@@ -1,0 +1,21 @@
+_target_: diffcsp.pl_modules.model.CrystGNN_Supervise
+encoder:
+  _target_: diffcsp.pl_modules.gnn.CSPNetForPropPrediction
+  num_targets: 1
+  use_site_info: true
+  site_info_dim: 8
+  network: transformer
+  hidden_channels: 512
+  max_atoms: 100
+  num_layers: 6
+  act_fn: silu
+  dis_emb: sin
+  num_freqs: 128
+  edge_style: fc
+  max_neighbors: 20
+  cutoff: 7.0
+  ln: true
+  ip: false
+  use_ks: true
+  use_gt_frac_coords: true
+  smooth: false

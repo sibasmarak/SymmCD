@@ -24,7 +24,7 @@ class CrystDataset(Dataset):
                  graph_method: ValueNode, preprocess_workers: ValueNode,
                  lattice_scale_method: ValueNode, save_path: ValueNode, tolerance: ValueNode, 
                  use_space_group: ValueNode, use_pos_index: ValueNode, number_representatives: ValueNode=0, 
-                 use_random_representatives:ValueNode=False, lim=0, **kwargs):
+                 use_random_representatives:ValueNode=False, use_asym_unit:ValueNode=False, lim=0, **kwargs):
         super().__init__()
         self.path = path
         self.name = name
@@ -39,6 +39,7 @@ class CrystDataset(Dataset):
         self.tolerance = tolerance
         self.number_representatives = number_representatives
         self.use_random_representatives = use_random_representatives
+        self.use_asym_unit = use_asym_unit
 
         self.preprocess(save_path, preprocess_workers, prop, lim)
 
@@ -84,17 +85,15 @@ class CrystDataset(Dataset):
         # atom_coords are fractional coordinates
         # edge_index is incremented during batching
         # https://pytorch-geometric.readthedocs.io/en/latest/notes/batching.html
+        mask = np.ones_like(atom_types, dtype=bool)
+        if self.use_asym_unit and np.unique(data_dict["identifier"]).size > 1:
+            # masking on the basis of identifiers of orbits in a crystal
+            identifiers = data_dict['identifier']
 
-        # masking on the basis of identifiers of orbits in a crystal
-        identifiers = data_dict['identifier']
-
-        #### Random atom from each orbit mask
-        #### --------------------------------------
-        # find a single representative for each identifier which can then mask
-        if 'mask' not in data_dict:
+            # masking to create asymmetric unit (with one representative from each orbit)
             mask = np.zeros_like(identifiers)
 
-            # # Process each unique identifier
+            # Process each unique identifier
             for identifier in np.unique(identifiers):
                 # Find indices where this identifier occurs
                 indices = np.where(identifiers == identifier)[0]
@@ -102,34 +101,30 @@ class CrystDataset(Dataset):
                 min_index = ((frac_coords - POINT)**2).sum(1)[indices].argmin().item()
                 mask[indices[min_index]] = 1
                 self.cached_data[index]['mask'] = mask
-        else:
-            mask = data_dict['mask']
-       
-        #### Asymmetric unit mask
-        #### ---------------------
-        
-        # mask = self.get_asym_unit_position(frac_coords, symd.load_group(data_dict['spacegroup'], dim=3))
-        
-        # # randomly keep one of the selected (mask value is 1) atoms
-        # unique_identifiers = np.unique(identifiers)
-        # for identifier in unique_identifiers:
-        #     if sum(mask[identifiers == identifier]) != 1:
-        #         try:
-        #             true_indices = np.where(mask[identifiers == identifier])[0]
-        #             new_mask = np.zeros_like(mask[identifiers == identifier], dtype=bool)
-        #             new_mask[random.choice(true_indices)] = True
-        #             mask[identifiers == identifier] = new_mask
-        #         except:
-        #             new_mask = np.zeros_like(mask[identifiers == identifier], dtype=bool)
-        #             new_mask[random.choice(np.arange(len(mask[identifiers == identifier])))] = True
-        #             mask[identifiers == identifier] = new_mask
-                    
-        # assert sum(mask) == len(unique_identifiers), "Length of asymmetric unit must match with unique identifiers."
-        
-        frac_coords = frac_coords[mask.astype(bool)]
-        atom_types = atom_types[mask.astype(bool)]
-        num_atoms = len(frac_coords)
+            
+            mask = mask.astype(bool)
+            frac_coords = frac_coords[mask]
+            
+            # the correct way to filter the edge_indices
+            # however this leads to empty edge_indices
+            # edge_indices_mask = np.isin(edge_indices[:, 0], np.where(mask)[0]) & np.isin(edge_indices[:, 1], np.where(mask)[0])
+            # edge_indices = edge_indices[edge_indices_mask]
+            # to_jimages = to_jimages[edge_indices_mask]
+            
+            edge_indices = np.array(np.meshgrid(np.where(mask)[0], np.where(mask)[0])).T.reshape(-1, 2)
+            edge_indices = edge_indices[edge_indices[:, 0] != edge_indices[:, 1]]
 
+            # Convert edge_indices to vary from 0 to len(frac_coords)-1
+            unique_nodes = np.unique(edge_indices)
+            node_mapping = {node: i for i, node in enumerate(unique_nodes)}
+            edge_indices = np.vectorize(node_mapping.get)(edge_indices.flatten()).reshape(-1, 2)
+            
+            # define to_jimages for the new edge_indices
+            to_jimages = np.zeros((edge_indices.shape[0], 3), dtype=int) # since entire asym_unit is contained inside the crystal
+            
+            atom_types = atom_types[mask]
+            num_atoms = len(frac_coords)
+            
         data = Data(
             frac_coords=torch.Tensor(frac_coords),
             atom_types=torch.LongTensor(atom_types),
@@ -138,7 +133,7 @@ class CrystDataset(Dataset):
             ks=torch.Tensor(ks).view(1, -1),
             edge_index=torch.LongTensor(
                 edge_indices.T).contiguous(),  # shape (2, num_edges)
-            to_jimages=torch.LongTensor(to_jimages),
+            to_jimages=torch.LongTensor(to_jimages), # shape (num_edges, 3)
             num_atoms=num_atoms,
             num_bonds=edge_indices.shape[0],
             num_nodes=num_atoms,  # special attribute used for batching in pytorch geometric
@@ -152,7 +147,8 @@ class CrystDataset(Dataset):
             data.number_representatives = torch.LongTensor([num_atoms]) # torch.LongTensor([data_dict['number_representatives']])
 
             data.sg_condition = torch.Tensor(data_dict['sg_binary'])
-            data.site_symm = torch.Tensor(data_dict['site_symm_binary'].float())[mask.astype(bool)]
+            data.site_symm = torch.Tensor(data_dict['site_symm_binary'].float())[mask] \
+                if self.use_asym_unit else torch.Tensor(data_dict['site_symm_binary'].float())
             
             data.dummy_repr_ind = torch.Tensor([data_dict['dummy_repr_ind']]).reshape(-1, 1)
             
@@ -162,10 +158,9 @@ class CrystDataset(Dataset):
             changes = torch.cat((torch.tensor([0]), changes, torch.tensor([len(identifiers_torch)])))
             consecutive_counts_torch = torch.diff(changes)
             data.x_loss_coeff = consecutive_counts_torch.reshape(-1, 1)
-            
-            # data.wyckoff_labels = torch.LongTensor(wyckoff_labels_to_category(data_dict['labels']))[mask.astype(bool)]
 
-        assert len(data.site_symm) == len(data.frac_coords) == len(data.atom_types) # == len(data.x_loss_coeff), breakpoint()
+            assert len(data.site_symm) == len(data.frac_coords) == len(data.atom_types), "Lengths do not match"
+
         if self.use_pos_index:
             pos_dic = {}
             indexes = []

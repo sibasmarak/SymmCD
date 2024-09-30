@@ -16,8 +16,14 @@ from torch_sparse import SparseTensor
 from diffcsp.common.data_utils import (
     get_pbc_distances,
     frac_to_cart_coords,
+    lattice_ks_to_matrix_torch,
+    lattice_params_to_matrix_torch,
+    radius_graph_pbc,
     radius_graph_pbc_wrapper,
+    repeat_blocks,
 )
+
+from torch_geometric.utils import dense_to_sparse
 
 try:
     import sympy as sym
@@ -316,6 +322,8 @@ class DimeNetPlusPlusWrap(DimeNetPlusPlus):
         num_after_skip=2,
         num_output_layers=3,
         readout='mean',
+        use_site_info=False,
+        site_info_dim=8,
     ):
         self.num_targets = num_targets
         self.cutoff = cutoff
@@ -339,6 +347,13 @@ class DimeNetPlusPlusWrap(DimeNetPlusPlus):
             num_after_skip=num_after_skip,
             num_output_layers=num_output_layers,
         )
+        
+        # If you want to leverage the site-specific information for each node
+        self.use_site_info = use_site_info
+        if self.use_site_info:
+            self.embed_site_info_dim = site_info_dim
+            self.embed_site_info_linear = nn.Linear(15 * 13, self.embed_site_info_dim) # to embed the site symmetry information
+            self.reduce_linear = nn.Linear(2 * self.embed_site_info_dim + hidden_channels, hidden_channels) # to reduce the dimension of the concatenated embeddings back to `hidden_channels`
 
     def forward(self, data):
         batch = data.batch
@@ -395,6 +410,20 @@ class DimeNetPlusPlusWrap(DimeNetPlusPlus):
 
         # Embedding block.
         x = self.emb(data.atom_types.long(), rbf, i, j)
+        
+        # If you want to leverage the site-specific information for each node
+        # For instance you want to use the site symmetry encoding from the PyXtal package 
+        if self.use_site_info:
+            x = self.reduce_linear(
+                torch.cat(
+                    [x, 
+                    torch.cat([
+                            self.embed_site_info_linear(data.site_symm[data.edge_index[0]].reshape(-1, 15 * 13)),
+                            self.embed_site_info_linear(data.site_symm[data.edge_index[1]].reshape(-1, 15 * 13))
+                        ], dim=-1)
+                    ], dim=-1)
+            )
+        
         P = self.output_blocks[0](x, rbf, i, num_nodes=pos.size(0))
 
         # Interaction blocks.
@@ -420,6 +449,250 @@ class DimeNetPlusPlusWrap(DimeNetPlusPlus):
             # TODO: if want to use cat, need two lines here
             energy = scatter(P, batch, dim=0, reduce=self.readout)
 
+        return energy
+
+    @property
+    def num_params(self):
+        return sum(p.numel() for p in self.parameters())
+    
+    
+from diffcsp.pl_modules.cspnet import CSPLayer, SinusoidsEmbedding, TransformerLayer
+class CSPNetForPropPrediction(nn.Module):
+    def __init__(
+        self,
+        num_targets=1,
+        use_site_info=False,
+        site_info_dim=8,
+        network='transformer',
+        hidden_channels = 128,
+        num_layers = 4,
+        max_atoms = 100,
+        act_fn = 'silu',
+        dis_emb = 'sin',
+        num_freqs = 10,
+        edge_style = 'fc',
+        cutoff = 6.0,
+        max_neighbors = 20,
+        ln = False,
+        ip = True,
+        use_ks = False,
+        use_gt_frac_coords=False,
+        smooth = False,
+    ):
+        super(CSPNetForPropPrediction, self).__init__()
+        
+        self.num_targets = num_targets
+        
+        self.ip = ip
+        self.use_ks = use_ks
+        self.use_site_info = use_site_info
+        self.embed_site_info_dim = 0
+        self.use_gt_frac_coords = use_gt_frac_coords
+        
+        self.ln = ln
+        self.cutoff = cutoff
+        self.smooth = smooth
+        self.network = network       
+        self.edge_style = edge_style
+        self.num_layers = num_layers
+        self.max_neighbors = max_neighbors
+        
+        assert self.use_ks != self.ip, "Cannot use both inner product representation and k representation"
+        
+        # initial `node_embedding` with atom types 
+        # smooth => use MLP, ~smooth => use nn.Embedding
+        self.node_embedding = nn.Linear(max_atoms, hidden_channels) if self.smooth else nn.Embedding(max_atoms, hidden_channels)
+
+        # fractional coordinates dimension
+        # `SinusoidsEmbedding` for fractional coordinates will embed in `num_freqs` dimensions, otherwise, the fractional coordinates is in 3 dimensions
+        self.frac_coord_dim = 0
+        self.dis_emb = SinusoidsEmbedding(n_frequencies = num_freqs) if dis_emb == 'sin' else None
+        assert not self.use_gt_frac_coords or (self.use_gt_frac_coords and self.dis_emb), "To use fractional coordinates, you need to provide a `dis_emb`"
+        if self.use_gt_frac_coords and self.dis_emb:
+            self.frac_coord_dim = self.dis_emb.dim
+            
+        if act_fn == 'silu':
+            self.act_fn = nn.SiLU()
+            
+        # to leverage site-specific information for each node
+        if self.use_site_info:
+            self.embed_site_info_dim = site_info_dim
+            self.embed_site_info_linear = nn.Linear(15 * 13, self.embed_site_info_dim) # to embed the site symmetry information
+        
+        # to obtain final node embeddings
+        # which could contain the atom type information, site symmetry information, and fractional coordinates information
+        self.reduce_linear = nn.Linear(self.embed_site_info_dim + hidden_channels + self.frac_coord_dim, hidden_channels)
+        
+        for i in range(0, num_layers):
+            if network == 'gnn':
+                self.add_module(
+                    "csp_layer_%d" % i, CSPLayer(hidden_channels, self.act_fn, self.dis_emb, ln=ln, ip=ip, use_ks=use_ks)
+                )  
+            elif network == 'transformer':
+                self.add_module(
+                    "csp_layer_%d" % i, TransformerLayer(hidden_channels, heads=8, concat=False, ln=ln, dis_emb=self.dis_emb, act_fn=self.act_fn)
+                )   
+        
+        if self.ln:
+            self.final_layer_norm = nn.LayerNorm(hidden_channels)
+            
+        self.energy_out = nn.Linear(hidden_channels, num_targets)
+
+    def select_symmetric_edges(self, tensor, mask, reorder_idx, inverse_neg):
+        # Mask out counter-edges
+        tensor_directed = tensor[mask]
+        # Concatenate counter-edges after normal edges
+        sign = 1 - 2 * inverse_neg
+        tensor_cat = torch.cat([tensor_directed, sign * tensor_directed])
+        # Reorder everything so the edges of every image are consecutive
+        tensor_ordered = tensor_cat[reorder_idx]
+        return tensor_ordered
+
+    def reorder_symmetric_edges(
+        self, edge_index, cell_offsets, neighbors, edge_vector
+    ):
+        """
+        Reorder edges to make finding counter-directional edges easier.
+
+        Some edges are only present in one direction in the data,
+        since every atom has a maximum number of neighbors. Since we only use i->j
+        edges here, we lose some j->i edges and add others by
+        making it symmetric.
+        We could fix this by merging edge_index with its counter-edges,
+        including the cell_offsets, and then running torch.unique.
+        But this does not seem worth it.
+        """
+
+        # Generate mask
+        mask_sep_atoms = edge_index[0] < edge_index[1]
+        # Distinguish edges between the same (periodic) atom by ordering the cells
+        cell_earlier = (
+            (cell_offsets[:, 0] < 0)
+            | ((cell_offsets[:, 0] == 0) & (cell_offsets[:, 1] < 0))
+            | (
+                (cell_offsets[:, 0] == 0)
+                & (cell_offsets[:, 1] == 0)
+                & (cell_offsets[:, 2] < 0)
+            )
+        )
+        mask_same_atoms = edge_index[0] == edge_index[1]
+        mask_same_atoms &= cell_earlier
+        mask = mask_sep_atoms | mask_same_atoms
+
+        # Mask out counter-edges
+        edge_index_new = edge_index[mask[None, :].expand(2, -1)].view(2, -1)
+
+        # Concatenate counter-edges after normal edges
+        edge_index_cat = torch.cat(
+            [
+                edge_index_new,
+                torch.stack([edge_index_new[1], edge_index_new[0]], dim=0),
+            ],
+            dim=1,
+        )
+
+        # Count remaining edges per image
+        batch_edge = torch.repeat_interleave(
+            torch.arange(neighbors.size(0), device=edge_index.device),
+            neighbors,
+        )
+        batch_edge = batch_edge[mask]
+        neighbors_new = 2 * torch.bincount(
+            batch_edge, minlength=neighbors.size(0)
+        )
+
+        # Create indexing array
+        edge_reorder_idx = repeat_blocks(
+            neighbors_new // 2,
+            repeats=2,
+            continuous_indexing=True,
+            repeat_inc=edge_index_new.size(1),
+        )
+
+        # Reorder everything so the edges of every image are consecutive
+        edge_index_new = edge_index_cat[:, edge_reorder_idx]
+        cell_offsets_new = self.select_symmetric_edges(
+            cell_offsets, mask, edge_reorder_idx, True
+        )
+        edge_vector_new = self.select_symmetric_edges(
+            edge_vector, mask, edge_reorder_idx, True
+        )
+
+        return (
+            edge_index_new,
+            cell_offsets_new,
+            neighbors_new,
+            edge_vector_new,
+        )
+
+    def gen_edges(self, num_atoms, frac_coords, lattices, node2graph):
+
+        if self.edge_style == 'fc':
+            lis = [torch.ones(n,n, device=num_atoms.device) for n in num_atoms]
+            fc_graph = torch.block_diag(*lis)
+            fc_edges, _ = dense_to_sparse(fc_graph)
+            return fc_edges, (frac_coords[fc_edges[1]] - frac_coords[fc_edges[0]])
+        elif self.edge_style == 'knn':
+            lattice_nodes = lattices[node2graph]
+            cart_coords = torch.einsum('bi,bij->bj', frac_coords, lattice_nodes)
+            
+            edge_index, to_jimages, num_bonds = radius_graph_pbc(
+                cart_coords, None, None, num_atoms, self.cutoff, self.max_neighbors,
+                device=num_atoms.device, lattices=lattices)
+
+            j_index, i_index = edge_index
+            distance_vectors = frac_coords[j_index] - frac_coords[i_index]
+            distance_vectors += to_jimages.float()
+
+            edge_index_new, _, _, edge_vector_new = self.reorder_symmetric_edges(edge_index, to_jimages, num_bonds, distance_vectors)
+
+            return edge_index_new, -edge_vector_new
+
+    def forward(self, data):
+        
+        batch = node2graph = data.batch
+        atom_types = data.atom_types
+        num_atoms = data.num_atoms
+        frac_coords = data.frac_coords
+        
+        if self.use_ks:
+            lattices = lattice_ks_to_matrix_torch(data.ks)
+        else:
+            lattices = lattice_params_to_matrix_torch(data.lengths, data.angles)
+            
+        lattices_features = data.ks if self.use_ks else lattices
+        
+        edges, frac_diff = self.gen_edges(num_atoms, frac_coords, lattices, node2graph)
+        edge2graph = node2graph[edges[0]]
+        
+        
+        if self.smooth:
+            node_features = self.node_embedding(atom_types)
+        else:
+            node_features = self.node_embedding(atom_types - 1)
+
+        # If you want to leverage the site-specific information for each node
+        # For instance you want to use the site symmetry encoding from the PyXtal package 
+        if self.use_site_info:
+            node_features = torch.cat([node_features, self.embed_site_info_linear(data.site_symm.reshape(-1, 15 * 13))], dim=-1)
+        
+        # append fractional coordinates
+        if self.use_gt_frac_coords and self.dis_emb:
+            node_features = torch.cat([node_features, self.dis_emb(frac_coords)], dim=1)
+            
+        node_features = self.reduce_linear(node_features)
+
+        for i in range(0, self.num_layers):
+            if self.network == 'transformer':
+                node_features = self._modules["csp_layer_%d" % i](node_features, frac_coords, lattices_features, edges, node2graph, frac_diff = frac_diff)
+            elif self.network == 'gnn':
+                node_features = self._modules["csp_layer_%d" % i](node_features, frac_coords, lattices_features, edges, edge2graph, frac_diff = frac_diff)
+
+        if self.ln:
+            node_features = self.final_layer_norm(node_features)
+
+        graph_features = scatter(node_features, node2graph, dim = 0, reduce = 'mean')
+        energy = self.energy_out(graph_features)
         return energy
 
     @property

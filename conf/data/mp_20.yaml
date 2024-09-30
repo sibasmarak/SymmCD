@@ -15,6 +15,7 @@ eval_model_name: mp20
 tolerance: 0.1
 
 use_space_group: true
+use_asym_unit: false
 use_pos_index: false
 number_representatives: 0 # if set to 0, no dummy representatives are added
 use_random_representatives: false # irrelevant
@@ -44,6 +45,7 @@ datamodule:
       use_pos_index: ${data.use_pos_index}
       number_representatives: ${data.number_representatives}
       use_random_representatives: ${data.use_random_representatives}
+      use_asym_unit: ${data.use_asym_unit}
       lattice_scale_method: ${data.lattice_scale_method}
       preprocess_workers: ${data.preprocess_workers}
 
@@ -62,6 +64,7 @@ datamodule:
         use_pos_index: ${data.use_pos_index}
         number_representatives: ${data.number_representatives}
         use_random_representatives: ${data.use_random_representatives}
+        use_asym_unit: ${data.use_asym_unit}
         lattice_scale_method: ${data.lattice_scale_method}
         preprocess_workers: ${data.preprocess_workers}
 
@@ -80,6 +83,7 @@ datamodule:
         use_pos_index: ${data.use_pos_index}
         number_representatives: ${data.number_representatives}
         use_random_representatives: ${data.use_random_representatives}
+        use_asym_unit: ${data.use_asym_unit}
         lattice_scale_method: ${data.lattice_scale_method}
         preprocess_workers: ${data.preprocess_workers}
 
