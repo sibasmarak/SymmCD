@@ -2,13 +2,14 @@ from collections import Counter
 import argparse
 import os
 import json
-
+import warnings
 import numpy as np
 from pathlib import Path
 from tqdm import tqdm
 from p_tqdm import p_map, p_umap
 from scipy.stats import wasserstein_distance
 import pandas as pd
+import torch
 
 from pymatgen.core.structure import Structure
 from pymatgen.core.composition import Composition
@@ -18,13 +19,17 @@ from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 from matminer.featurizers.site.fingerprint import CrystalNNFingerprint
 from matminer.featurizers.composition.composite import ElementProperty
 
+import sys
+sys.path.append('.')
+
+from diffcsp.common.data_utils import build_crystal, get_symmetry_info
 from pyxtal import pyxtal
 
 import pickle
 
 import sys
 sys.path.append('.')
-
+warnings.simplefilter("ignore")
 from scripts.eval_utils import (
     smact_validity, structure_validity, CompScaler, get_fp_pdist,
     load_config, load_data, get_crystals_list, prop_model_eval, compute_cov)
@@ -70,7 +75,10 @@ class Crystal(object):
         self.atom_types = crys_array_dict['atom_types']
         self.lengths = crys_array_dict['lengths']
         self.angles = crys_array_dict['angles']
-        self.spacegroup = crys_array_dict['spacegroups']
+        if 'spacegroups' in crys_array_dict:
+            self.spacegroup = crys_array_dict['spacegroups']
+        else:
+            self.spacegroup = None
         
         # check for NaN values 
         if np.isnan(self.lengths).any() or np.isinf(self.lengths).any():
@@ -318,11 +326,12 @@ class RecEvalBatch(object):
 
 class GenEval(object):
 
-    def __init__(self, pred_crys, gt_crys, n_samples=1000, eval_model_name=None):
+    def __init__(self, pred_crys, gt_crys, n_samples=1000, eval_model_name=None, gt_prop_eval_path=None):
         self.crys = pred_crys
         self.gt_crys = gt_crys
         self.n_samples = n_samples
         self.eval_model_name = eval_model_name
+        self.gt_prop_eval_path = gt_prop_eval_path
 
         valid_crys = [c for c in pred_crys if c.valid]
         if n_samples == 0:
@@ -363,15 +372,19 @@ class GenEval(object):
         if self.eval_model_name is not None:
             pred_props = prop_model_eval(self.eval_model_name, [
                                          c.dict for c in self.valid_samples])
-            gt_props = prop_model_eval(self.eval_model_name, [
-                                       c.dict for c in self.gt_crys])
+            if self.gt_prop_eval_path is not None and os.path.exists(self.gt_prop_eval_path):
+                gt_props = torch.load(self.gt_prop_eval_path)
+            else:
+                gt_props = prop_model_eval(self.eval_model_name, [
+                                           c.dict for c in self.gt_crys])
+                torch.save(gt_props, self.gt_prop_eval_path)
             wdist_prop = wasserstein_distance(pred_props, gt_props)
             return {'wdist_prop': wdist_prop}
         else:
             return {'wdist_prop': None}
 
     def get_spacegroup_wdist(self):
-        pred_spacegroup = [c.spacegroup for c in self.valid_samples]
+        pred_spacegroup = [c.real_spacegroup for c in self.valid_samples]
         gt_spacegroup = [c.spacegroup for c in self.gt_crys]
         wdist_spacegroup = wasserstein_distance(pred_spacegroup, gt_spacegroup)
         return {'wdist_spacegroup': wdist_spacegroup}
@@ -427,16 +440,17 @@ def get_crystal_array_list(file_path, batch_idx=0):
                 data['num_atoms'][i])
             crys_array_list.append(tmp_crys_array_list)
     elif batch_idx == -2:
+        kwargs = dict()
+        if 'spacegroups' in data and 'site_symmetries' in data:
+            kwargs['spacegroups'] = data['spacegroups']
+            kwargs['site_symmetries'] = data['site_symmetries']
         crys_array_list = get_crystals_list(
             data['frac_coords'],
             data['atom_types'],
             data['lengths'],
             data['angles'],
             data['num_atoms'],
-            **{
-                'spacegroups': data['spacegroups'],
-                'site_symmetries': data['site_symmetries']
-            })        
+            **kwargs)        
     else:
         crys_array_list = get_crystals_list(
             data['frac_coords'][batch_idx],
@@ -472,6 +486,20 @@ def get_gt_crys_ori(cif):
         'angles': np.array(lattice.angles),
         'spacegroups': spacegroup
     }
+    return Crystal(crys_array_dict)
+
+def get_gt_crys_ori_conventional(cif):
+    crystal = build_crystal(cif)
+    crystal, sym_info, dummy_repr_ind, dummy_origin_ind, identifier = get_symmetry_info(crystal, tol=0.01, num_repr=0)
+    spacegroup = sym_info['spacegroup']
+    lattice = crystal.lattice
+    crys_array_dict = {
+        'frac_coords':crystal.frac_coords,
+        'atom_types':np.array([_.Z for _ in crystal.species]),
+        'lengths': np.array(lattice.abc),
+        'angles': np.array(lattice.angles),
+        'spacegroups': spacegroup
+    }
     return Crystal(crys_array_dict) 
 
 def main(args):
@@ -484,10 +512,12 @@ def main(args):
 
         gen_file_path = get_file_paths(args.root_path, 'gen', args.label)
         crys_array_list, _ = get_crystal_array_list(gen_file_path, batch_idx = -2)
-        gen_crys = p_umap(lambda x: Crystal(x), crys_array_list)
         if args.gt_file != '':
             csv = pd.read_csv(args.gt_file)
-            gt_crys = p_map(get_gt_crys_ori, csv['cif'])
+            if args.conventional:
+                gt_crys = p_map(get_gt_crys_ori_conventional, csv['cif'])
+            else:
+                gt_crys = p_map(get_gt_crys_ori, csv['cif'])
         else:
             # always ground gt_file is provided
             # if not provided then only use the reconstruction path to load true crystals
@@ -495,8 +525,12 @@ def main(args):
             _, true_crystal_array_list = get_crystal_array_list(
                 recon_file_path)
             gt_crys = p_map(lambda x: Crystal(x), true_crystal_array_list)
+
+        gen_crys = p_umap(lambda x: Crystal(x), crys_array_list)
+
         gen_evaluator = GenEval(
-            gen_crys, gt_crys, eval_model_name=eval_model_name, n_samples=args.n_samples)
+            gen_crys, gt_crys, eval_model_name=eval_model_name, n_samples=args.n_samples,
+            gt_prop_eval_path=cfg.data.datamodule.datasets.val[0].gt_prop_eval_path)
         gen_metrics = gen_evaluator.get_metrics()
         all_metrics.update(gen_metrics)
 
@@ -568,5 +602,7 @@ if __name__ == '__main__':
     parser.add_argument('--gt_file',default='')
     parser.add_argument('--multi_eval',action='store_true')
     parser.add_argument('--n_samples', type=int, default=1000)
+    parser.add_argument('--conventional', type=bool, default=False,
+                        help='whether to use the conventional lattice instead of the primitive lattice')
     args = parser.parse_args()
     main(args)

@@ -7,6 +7,7 @@ import torch
 import copy
 import json
 import itertools
+import warnings
 import os
 
 from pymatgen.core.structure import Structure
@@ -238,7 +239,7 @@ def get_wyckoff_symbol_from_binary_repr(binary_repr:torch.tensor, spacegroup_num
 
 
 
-def get_symmetry_info(crystal, tol=0.01, num_repr=10, use_random_repr=False):
+def get_symmetry_info(crystal, tol=0.01, num_repr=0, use_random_repr=False):
     spga = SpacegroupAnalyzer(crystal, symprec=tol)
     # NOTE: this converts [x,0,0.5] -> [0, 0.5, x] (or the canonical form)
     # basically diffusion model learns the distribution of this refined structure and not the original structure
@@ -329,14 +330,16 @@ def build_crystal_graph(crystal, graph_method='crystalnn'):
     """
     crystal.perturb(0.0001)
     if graph_method == 'crystalnn':
-        try:
-            crystal_graph = StructureGraph.with_local_env_strategy(
-                crystal, CrystalNN)
-        except:
-            # TODO: make it 10 for perov and 20 for mp20
-            crystalNN_tmp = local_env.CrystalNN(distance_cutoffs=None, x_diff_weight=-1, porous_adjustment=False, search_cutoff=20)
-            crystal_graph = StructureGraph.with_local_env_strategy(
-                crystal, crystalNN_tmp) 
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            try:
+                crystal_graph = StructureGraph.with_local_env_strategy(
+                    crystal, CrystalNN)
+            except:
+                # TODO: make it 10 for perov and 20 for mp20
+                crystalNN_tmp = local_env.CrystalNN(distance_cutoffs=None, x_diff_weight=-1, porous_adjustment=False, search_cutoff=20)
+                crystal_graph = StructureGraph.with_local_env_strategy(
+                    crystal, crystalNN_tmp) 
     elif graph_method == 'none':
         pass
     else:
@@ -413,7 +416,9 @@ def lattice_ks_to_matrix_torch(ks):
         ks: torch.Tensor of shape (N, 6)
     """
     S = torch.einsum('bij,nb->nij', torch.tensor(B_MATRICES, device=ks.device, dtype=ks.dtype), ks)
-    L = torch.matrix_exp(S)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        L = torch.matrix_exp(S)
     return L
 
 def lattice_params_to_matrix_torch(lengths, angles):
@@ -1319,7 +1324,7 @@ def get_scaler_from_data_list(data_list, key):
     return scaler
 
 
-def process_one(row, niggli, primitive, graph_method, prop_list, use_space_group = False, tol=0.01, num_repr=10, use_random_repr=False):
+def process_one(row, niggli, primitive, graph_method, prop_list, use_space_group = False, tol=0.01, num_repr=0, use_random_repr=False):
     crystal_str = row['cif']
     crystal = build_crystal(
         crystal_str, niggli=niggli, primitive=primitive)

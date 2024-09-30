@@ -28,11 +28,18 @@ from diffcsp.pl_modules.diff_utils import d_log_p_wrapped_normal
 from diffcsp.pl_modules.model import build_mlp
 
 
-MAX_ATOMIC_NUM=101
+MAX_ATOMIC_NUM=94
 SITE_SYMM_AXES = 15
 SITE_SYMM_PGS = 13
 SITE_SYMM_DIM = SITE_SYMM_AXES * SITE_SYMM_PGS
 SG_CONDITION_DIM = 397
+SG_SYM = {spacegroup: Group(spacegroup) for spacegroup in range(1, 231)}
+SG_TO_WP_TO_SITE_SYMM = dict()
+for spacegroup in range(1, 231):
+    SG_TO_WP_TO_SITE_SYMM[spacegroup] = dict()
+    for wp in SG_SYM[spacegroup].Wyckoff_positions:
+        wp.get_site_symmetry()
+        SG_TO_WP_TO_SITE_SYMM[spacegroup][wp] = wp.get_site_symmetry_object().to_one_hot()
 
 from scripts.generation import SampleDataset
 from scripts.compute_metrics import Crystal, GenEval, get_gt_crys_ori
@@ -63,10 +70,7 @@ def modify_frac_coords_one(frac_coords, site_symm, atom_types, spacegroup):
     spacegroup = spacegroup.item()
     site_symm_axis = site_symm.reshape(-1, SITE_SYMM_AXES, SITE_SYMM_PGS).detach().cpu()
     # Get site symmetry of each WP for the spacegroup
-    wp_to_site_symm = dict()
-    for wp in Group(spacegroup).Wyckoff_positions:
-        wp.get_site_symmetry()
-        wp_to_site_symm[wp] = wp.get_site_symmetry_object().to_one_hot()
+    wp_to_site_symm = SG_TO_WP_TO_SITE_SYMM[spacegroup]
 
     # iterate over frac coords and corresponding site-symm
     new_frac_coords, new_atom_types, new_site_symm = [], [], []
@@ -82,7 +86,7 @@ def modify_frac_coords_one(frac_coords, site_symm, atom_types, spacegroup):
         closes = []
         for wp in closest_ss_wps:
             for orbit_index in range(len(wp.ops)):
-                close = search_cloest_wp(Group(spacegroup), wp, wp.ops[orbit_index], frac_coord)%1.
+                close = search_cloest_wp(SG_SYM[spacegroup], wp, wp.ops[orbit_index], frac_coord)%1.
                 closes.append((close, wp, orbit_index, np.linalg.norm(np.minimum((close - frac_coord)%1., (frac_coord - close)%1.))))
         try:
             # pick the nearest wp to project
@@ -689,7 +693,8 @@ class CSPDiffusion(BaseModule):
             
         print(f"INFO: Done reading ground truth crystals (Epoch: {self.current_epoch + 1})")
         
-        gen_evaluator = GenEval(gen_crys, gt_crys, n_samples=0, eval_model_name=self.hparams.data.eval_model_name)
+        gen_evaluator = GenEval(gen_crys, gt_crys, n_samples=0, eval_model_name=self.hparams.data.eval_model_name,
+                                gt_prop_eval_path=self.hparams.data.datamodule.datasets.val[0].gt_prop_eval_path)
         gen_metrics = gen_evaluator.get_metrics()
         print(gen_metrics)
         

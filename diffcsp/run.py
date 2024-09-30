@@ -150,6 +150,8 @@ def run(cfg: DictConfig) -> None:
 
     # Load checkpoint (if exist)
     ckpts = list(hydra_dir.glob('*.ckpt'))
+    # Filter to only include ckpts with epoch info
+    ckpts = [x for x in ckpts if  '-' in x.parts[-1] and '=' in x.parts[-1]]
     if len(ckpts) > 0:
         ckpt_epochs = np.array([int(ckpt.parts[-1].split('-')[0].split('=')[1]) for ckpt in ckpts])
         ckpt = str(ckpts[ckpt_epochs.argsort()[-1]])

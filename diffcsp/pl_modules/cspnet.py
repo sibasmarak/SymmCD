@@ -14,8 +14,10 @@ from diffcsp.pl_modules.model import build_mlp
 
 from torch_geometric.nn.conv.transformer_conv import TransformerConv
 
-MAX_ATOMIC_NUM=100
-SITE_SYMM_DIM=15*13
+MAX_ATOMIC_NUM=94
+N_AXES = 15
+N_SS = 13
+SITE_SYMM_DIM = N_AXES * N_SS
 
 class SinusoidsEmbedding(nn.Module):
     def __init__(self, n_frequencies = 10, n_space = 3):
@@ -99,6 +101,30 @@ class CSPLayer(nn.Module):
         node_output = self.node_model(node_features, edge_features, edge_index)
         return node_input + node_output
 
+class TransformerLayer(nn.Module):
+    def __init__(self, hidden_dim=128, heads=8, ln=True, concat=True, dis_emb=None, act_fn=nn.SiLU()):
+        super(TransformerLayer, self).__init__()
+        self.dis_dim = 3
+        self.dis_emb = dis_emb
+        self.lattice_dim = 6
+        self.ln = ln
+        self.conv = TransformerConv(hidden_dim + self.lattice_dim + self.dis_dim, out_channels=hidden_dim, heads=heads, concat=concat, edge_dim=dis_emb.dim)
+        self.act_fn = act_fn
+        if self.ln:
+            self.layer_norm = nn.LayerNorm(hidden_dim)
+
+    def forward(self, node_features, frac_coords, lattice_feats, edge_index, node2graph, frac_diff = None):
+        torch.use_deterministic_algorithms(False) # NOTE: see if this is necessary later
+        edge_features = self.dis_emb(frac_diff)
+        node_input = node_features
+        if self.ln:
+            node_features = self.layer_norm(node_input)
+        lattice_feats_flatten = lattice_feats.view(-1, self.lattice_dim)
+        lattice_feats_flatten_nodes = lattice_feats_flatten[node2graph]
+        node_features = torch.cat([node_features, lattice_feats_flatten_nodes, frac_coords], dim=1)
+        node_output = self.act_fn(self.conv(node_features, edge_index, edge_features))
+        return node_input + node_output
+
 
 class TransformerLayer(nn.Module):
     def __init__(self, hidden_dim=128, heads=8, ln=True, concat=True, dis_emb=None, act_fn=nn.SiLU()):
@@ -147,6 +173,8 @@ class CSPNet(nn.Module):
         pred_type = False,
         pred_site_symm_type = False,
         use_atom_weighting = False,
+        site_symm_matrix_embed=False,
+        mask_token=False
     ):
         super(CSPNet, self).__init__()
 
@@ -156,13 +184,22 @@ class CSPNet(nn.Module):
         self.use_gt_frac_coords = use_gt_frac_coords
         self.use_site_symm = use_site_symm
         self.use_atom_weighting = use_atom_weighting
+        self.mask_token = 1 if mask_token else 0
         assert self.use_ks != self.ip # Cannot use both inner product representation and k representation
         if self.smooth:
             self.node_embedding = nn.Linear(max_atoms, hidden_dim)
         else:
             self.node_embedding = nn.Embedding(max_atoms, hidden_dim)
-        self.site_symm_embedding = nn.Linear(SITE_SYMM_DIM, latent_dim)
-        site_symm_dim = latent_dim if self.use_site_symm else 0
+        self.site_symm_matrix_embed = site_symm_matrix_embed
+        self.n_ss = N_SS + self.mask_token
+        self.site_symm_dim = N_AXES*self.n_ss
+        if self.site_symm_matrix_embed:
+            self.ss_matrix_embed_dim = 4
+            self.axis_embedding = nn.Linear(self.n_ss, self.ss_matrix_embed_dim)
+            self.site_symm_embedding = nn.Linear(N_AXES*self.ss_matrix_embed_dim, latent_dim)
+        else:
+            self.site_symm_embedding = nn.Linear(self.site_symm_dim, latent_dim)
+
         lattice_dim = 9 if self.ip else 6
         frac_coord_dim = 3 if self.use_gt_frac_coords else 0
         if act_fn == 'silu':
@@ -173,7 +210,7 @@ class CSPNet(nn.Module):
             self.dis_emb = None
         if self.use_gt_frac_coords and self.dis_emb:
             frac_coord_dim = self.dis_emb.dim
-        self.atom_latent_emb = nn.Linear(hidden_dim + latent_dim + site_symm_dim + frac_coord_dim, hidden_dim)
+        self.atom_latent_emb = nn.Linear(hidden_dim + 2*latent_dim + (latent_dim if self.use_site_symm else 0) + frac_coord_dim, hidden_dim)
         for i in range(0, num_layers):
             if network == 'gnn':
                 self.add_module(
@@ -198,9 +235,15 @@ class CSPNet(nn.Module):
         if self.pred_type:
             self.type_out = nn.Linear(hidden_dim, max_atoms)
         if self.pred_site_symm_type:
-            self.site_symm_out = nn.Linear(hidden_dim, SITE_SYMM_DIM)
+            self.site_symm_out = nn.Linear(hidden_dim, self.site_symm_dim)
+            if self.site_symm_matrix_embed:
+                self.ss_matrix_out_dim = 8
+                self.axis_wise_out = nn.Linear(hidden_dim, N_AXES*self.ss_matrix_out_dim)
+                self.symm_wise_out = nn.Linear(hidden_dim, self.n_ss*self.ss_matrix_out_dim)
+            else:
+                self.site_symm_out = nn.Linear(hidden_dim, self.site_symm_dim)
         if self.use_atom_weighting:
-            self.pred_gt_site_symm = nn.Linear(hidden_dim + SITE_SYMM_DIM, SITE_SYMM_DIM)
+            self.pred_gt_site_symm = nn.Linear(hidden_dim + self.site_symm_dim, self.site_symm_dim)    
 
     def select_symmetric_edges(self, tensor, mask, reorder_idx, inverse_neg):
         # Mask out counter-edges
@@ -325,7 +368,12 @@ class CSPNet(nn.Module):
         t_per_atom = t.repeat_interleave(num_atoms, dim=0)
         node_features = torch.cat([node_features, t_per_atom], dim=1)
         if self.use_site_symm:
-            node_features = torch.cat([node_features, self.site_symm_embedding(site_symm_probs)], dim=1)
+            if self.site_symm_matrix_embed:
+                axis_embeddings = self.axis_embedding(site_symm_probs.reshape(-1, N_AXES, self.n_ss))
+                site_symm_embeddings = self.site_symm_embedding(axis_embeddings.reshape(-1, N_AXES*self.ss_matrix_embed_dim))
+            else:
+                site_symm_embeddings = self.site_symm_embedding(site_symm_probs)
+            node_features = torch.cat([node_features, site_symm_embeddings], dim=1)
         if self.use_gt_frac_coords and self.dis_emb:
             node_features = torch.cat([node_features, self.dis_emb(frac_coords)], dim=1)
         node_features = self.atom_latent_emb(node_features)
@@ -349,18 +397,23 @@ class CSPNet(nn.Module):
                 lattice_out = torch.einsum('bij,bjk->bik', lattice_out, lattices)
         if self.pred_type and self.pred_site_symm_type:
             type_out = self.type_out(node_features)
-            site_symm_out = self.site_symm_out(node_features)
+            if self.site_symm_matrix_embed:
+                axis_embs = self.axis_wise_out(node_features).reshape(-1, N_AXES, self.ss_matrix_out_dim)
+                symm_embs = self.symm_wise_out(node_features).reshape(-1, self.n_ss, self.ss_matrix_out_dim)
+                site_symm_out = (axis_embs @ symm_embs.swapaxes(-1, -2)).flatten()
+            else:
+                site_symm_out = self.site_symm_out(node_features)
             if self.use_atom_weighting:
                 pred_gt_site_symm = self.pred_gt_site_symm(torch.cat([node_features, site_symm_probs], dim=1))
-                return lattice_out, coord_out, type_out, site_symm_out.reshape(-1, SITE_SYMM_DIM), pred_gt_site_symm
+                return lattice_out, coord_out, type_out, site_symm_out.reshape(-1, self.site_symm_dim), pred_gt_site_symm
             else:
-                return lattice_out, coord_out, type_out, site_symm_out.reshape(-1, SITE_SYMM_DIM)
+                return lattice_out, coord_out, type_out, site_symm_out.reshape(-1, self.site_symm_dim)
         if self.pred_type and not self.pred_site_symm_type:
             type_out = self.type_out(node_features)
             return lattice_out, coord_out, type_out
         if not self.pred_type and self.pred_site_symm_type:
             site_symm_out = self.site_symm_out(node_features)
-            return lattice_out, coord_out, site_symm_out.reshape(-1, SITE_SYMM_DIM)
+            return lattice_out, coord_out, site_symm_out.reshape(-1, self.site_symm_dim)
 
         return lattice_out, coord_out
 
