@@ -12,11 +12,11 @@ module load anaconda/3
 conda activate diffcsp39
 
 # training
-HYDRA_FULL_ERROR=1 python diffcsp/run.py expname=mp_20 data=mp_20 data.number_representatives=0 data.train_max_epochs=100000 \
+HYDRA_FULL_ERROR=1 python diffcsp/run.py expname=mp_20 data=mp_20 model=discrete_diffusion_w_site_symm \
+data.number_representatives=0 data.train_max_epochs=100000 \
 logging.wandb.mode=offline logging.wandb.project=diffcsp_symmetry logging.val_check_interval=1 optim.optimizer.lr=0.001 \
-model=diffusion_w_site_symm model.use_ks=True model.ip=False model.use_gt_frac_coords=True model.use_site_symm=True model.decoder.network=gnn \
-model.decoder.hidden_dim=512 model.decoder.num_layers=6 model.beta_scheduler.nu_site_symm=1 model.beta_scheduler.nu_lattice=1 model.beta_scheduler.nu_atom=1 \
-model.use_atom_weighting=false data.eval_every_epoch=100 data.eval_generate_samples=100
+data.use_space_group=True data.use_asym_unit=False data.eval_every_epoch=100 \
+model.decoder.hidden_dim=512 model.decoder.num_layers=6 model.decoder.use_site_symm=False model.decoder.use_site_symm=False
 
 # generating eval_gen.pt (for Table 4 in DiffCSP paper, ab-initio generation) 
 # python -m scripts.generation --model_path /home/mila/s/siba-smarak.panigrahi/scratch/DiffCSP/hydra/singlerun/2024-03-17/mp_20_gnn_gt_frac_coords/ --dataset mp --label final_num_samples_20 --batch_size 5 --num_batches_to_samples 2

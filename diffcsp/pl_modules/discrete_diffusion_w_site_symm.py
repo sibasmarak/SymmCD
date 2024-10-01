@@ -141,6 +141,7 @@ class DiscreteNoise(nn.Module):
 
         U_ss_list = []
         for ss_priors_i_per_sg in self.site_symm_prior_per_sg:
+            ss_priors_i_per_sg = ss_priors_i_per_sg.to(node_mask.device)
             ss_priors_i = ss_priors_i_per_sg[sgs]
             ss_limit_i = ss_priors_i.unsqueeze(-2).expand(bs, n_max, -1)
             U_ss_i = ss_limit_i.flatten(end_dim=-2).multinomial(1).reshape(bs, n_max).to(node_mask.device)
