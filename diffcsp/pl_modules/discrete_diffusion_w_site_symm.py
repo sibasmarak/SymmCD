@@ -151,7 +151,7 @@ class DiscreteNoise(nn.Module):
 
         return U_a, U_ss
 
-    def sample_discrete_features(self, prob_a, prob_ss, node_mask):
+    def sample_discrete_features(self, prob_a, node_mask):
         ''' Sample features from multinomial distribution with given probabilities (probX, probE, proby)
             :param prob_a: bs, n, dx_out        node features
             :param prob_ss: bs, n, dx_out        node features
@@ -159,10 +159,10 @@ class DiscreteNoise(nn.Module):
         bs, n = node_mask.shape
         # The masked rows should define probability distributions as well
         prob_a[~node_mask] = 1 / prob_a.shape[-1]
-        prob_ss_list = self.ss_to_sections(prob_ss)
+        #prob_ss_list = self.ss_to_sections(prob_ss)
         #prob_ss_norm_list = []
-        for i in range(SITE_SYMM_AXES):
-            prob_ss_list[i][~node_mask] = 1 / prob_ss_list[i].shape[-1]
+        #for i in range(SITE_SYMM_AXES):
+        #    prob_ss_list[i][~node_mask] = 1 / prob_ss_list[i].shape[-1]
         # Flatten the probability tensor to sample with multinomial
         prob_a = prob_a.reshape(bs * n, -1)       # (bs * n, dx_out)
         # Sample a
@@ -170,15 +170,15 @@ class DiscreteNoise(nn.Module):
         atom_t = atom_t.reshape(bs, n)     # (bs, n)
         atom_t = F.one_hot(atom_t, num_classes=prob_a.shape[-1]).float()
         # Sample ss
-        site_symm_t_list = []
-        for i in range(SITE_SYMM_AXES):
-            prob_ss_i = prob_ss_list[i].reshape(bs * n, -1)       # (bs * n, dx_out)
-            site_symm_t_i_cat = prob_ss_i.multinomial(1).reshape(bs, n)
-            site_symm_t_i =  F.one_hot(site_symm_t_i_cat, num_classes=self.site_symm_pgs).float()
-            site_symm_t_list.append(site_symm_t_i)
-        site_symm_t = torch.cat(site_symm_t_list, -1)
+        #site_symm_t_list = []
+        #for i in range(SITE_SYMM_AXES):
+        #    prob_ss_i = prob_ss_list[i].reshape(bs * n, -1)       # (bs * n, dx_out)
+        #    site_symm_t_i_cat = prob_ss_i.multinomial(1).reshape(bs, n)
+        #    site_symm_t_i =  F.one_hot(site_symm_t_i_cat, num_classes=self.site_symm_pgs).float()
+        #    site_symm_t_list.append(site_symm_t_i)
+        #site_symm_t = torch.cat(site_symm_t_list, -1)
 
-        return atom_t, site_symm_t
+        return atom_t#, site_symm_t
 
 
     def p_s_and_t_given_0(self, z_t, Qt, Qsb, Qtb):
@@ -263,18 +263,18 @@ class DiscreteNoise(nn.Module):
         sampled_a_s, sampled_ss_s = self.sample_discrete_features(prob_a, prob_ss, node_mask)
         return sampled_a_s, sampled_ss_s
 
-    def discrete_loss(self, sample_a, sample_ss, pred_a, pred_ss):
+    def discrete_loss(self, sample_a, pred_a):
         '''
         Cross entropy loss for atom_types as well as each site_symm component
         '''
         loss_a = F.nll_loss(torch.log(pred_a + 1e-20), sample_a)
-        pred_ss_split = self.ss_to_sections(pred_ss)
-        losses = []
-        for i, pred_ss_i in enumerate(pred_ss_split):
-            loss_ss_i = F.nll_loss(torch.log(pred_ss_i +  1e-20), sample_ss[..., i])
-            losses.append(loss_ss_i)
-        loss_ss = torch.stack(losses).mean()
-        return loss_a, loss_ss
+        #pred_ss_split = self.ss_to_sections(pred_ss)
+        #losses = []
+        #for i, pred_ss_i in enumerate(pred_ss_split):
+        #    loss_ss_i = F.nll_loss(torch.log(pred_ss_i +  1e-20), sample_ss[..., i])
+        #    losses.append(loss_ss_i)
+        #loss_ss = torch.stack(losses).mean()
+        return loss_a#, loss_ss
 
 class DiscreteNoiseMarginal(DiscreteNoise):
     def __init__(self, data_root_path, beta_scheduler):
@@ -503,11 +503,11 @@ class CSPDiffusion(BaseModule):
         batch_size = batch.num_graphs
         dummy_repr_ind = batch.dummy_repr_ind
         atom_types, node_mask = to_dense_batch(batch.atom_types - 1, batch.batch, fill_value=0)
-        if self.hparams.prior == 'masked':
-            site_symm = torch.cat([batch.site_symm, torch.zeros_like(batch.site_symm)[..., :1]], dim=-1)
-        else:
-            site_symm = batch.site_symm
-        site_symms, node_mask = to_dense_batch(site_symm.flatten(-2, -1), batch.batch, fill_value=0)
+        #if self.hparams.prior == 'masked':
+        #    site_symm = torch.cat([batch.site_symm, torch.zeros_like(batch.site_symm)[..., :1]], dim=-1)
+        #else:
+        #    site_symm = batch.site_symm
+        #site_symms, node_mask = to_dense_batch(site_symm.flatten(-2, -1), batch.batch, fill_value=0)
         gt_spacegroup_onehot = F.one_hot(batch.spacegroup - 1, num_classes=N_SPACEGROUPS).float()
         times = self.beta_scheduler.uniform_sample_t(batch_size, self.device)
         time_emb = torch.cat([self.time_embedding(times), self.spacegroup_embedding(batch.sg_condition.reshape(-1, SG_CONDITION_DIM))], dim=-1)
@@ -545,11 +545,11 @@ class CSPDiffusion(BaseModule):
         input_frac_coords = (frac_coords + sigmas_per_atom * rand_x) % 1.
 
         gt_atom_types_onehot = F.one_hot(atom_types, num_classes=self.discrete_noise.max_atomic_num).float()
-        gt_site_symm_binary = site_symms
+        #gt_site_symm_binary = site_symms
 
         atom_type_noised_probs = self.discrete_noise.apply_atom_noise(gt_atom_types_onehot, times)
-        site_symm_noised_probs = self.discrete_noise.apply_site_symm_noise(gt_site_symm_binary, times, batch.spacegroup)
-        atom_types_noised, site_symms_noised = self.discrete_noise.sample_discrete_features(atom_type_noised_probs, site_symm_noised_probs, node_mask)
+        #site_symm_noised_probs = self.discrete_noise.apply_site_symm_noise(gt_site_symm_binary, times, batch.spacegroup)
+        atom_types_noised = self.discrete_noise.sample_discrete_features(atom_type_noised_probs, node_mask)
 
         if self.keep_coords:
             input_frac_coords = frac_coords
@@ -560,16 +560,16 @@ class CSPDiffusion(BaseModule):
 
         # pass noised site symmetries and behave similar to atom type probs
         lattice_feats = input_ks if self.use_ks else input_lattice
-        symm_t = site_symms_noised[node_mask]
+        #symm_t = site_symms_noised[node_mask]
         atom_types_t = atom_types_noised[node_mask]
-        pred_lattice, pred_x, pred_t_logit, pred_symm_logit = self.decoder(time_emb, atom_types_t, input_frac_coords, 
+        pred_lattice, pred_x, pred_t_logit = self.decoder(time_emb, atom_types_t, input_frac_coords, 
                                                     lattice_feats, input_lattice, batch.num_atoms, 
-                                                    batch.batch, site_symm_probs=symm_t)
+                                                    batch.batch)#, site_symm_probs=symm_t)
         
         pred_t = F.softmax(pred_t_logit, -1)
-        pred_symm = F.softmax(self.discrete_noise.reshape_ss(pred_symm_logit), -1).flatten(-2, -1)
-        if self.hparams.prior == 'masked':
-            pred_t, pred_symm = self.discrete_noise.sub_predictions(pred_t, pred_symm, atom_types_t, symm_t)
+        #pred_symm = F.softmax(self.discrete_noise.reshape_ss(pred_symm_logit), -1).flatten(-2, -1)
+        #if self.hparams.prior == 'masked':
+        #    pred_t, pred_symm = self.discrete_noise.sub_predictions(pred_t, pred_symm, atom_types_t, symm_t)
 
         tar_x = d_log_p_wrapped_normal(sigmas_per_atom * rand_x, sigmas_per_atom) / torch.sqrt(sigmas_norm_per_atom)
 
@@ -578,21 +578,22 @@ class CSPDiffusion(BaseModule):
 
         loss_coord = F.mse_loss(pred_x, tar_x)
         
-        loss_type, loss_symm = self.discrete_noise.discrete_loss(batch.atom_types - 1, batch.site_symm.argmax(-1), pred_t, pred_symm)
+        #loss_type, loss_symm = self.discrete_noise.discrete_loss(batch.atom_types - 1, batch.site_symm.argmax(-1), pred_t, pred_symm)
+        loss_type = self.discrete_noise.discrete_loss(batch.atom_types - 1, pred_t)
 
         loss = (
             self.hparams.cost_lattice * loss_lattice +
             self.hparams.cost_coord * loss_coord + 
-            self.hparams.cost_type * loss_type +
-            self.hparams.cost_symm * loss_symm
+            self.hparams.cost_type * loss_type# +
+            #self.hparams.cost_symm * loss_symm
         )
 
         return {
             'loss' : loss,
             'loss_lattice' : loss_lattice,
             'loss_coord' : loss_coord,
-            'loss_type' : loss_type,
-            'loss_symm' : loss_symm,
+            'loss_type' : loss_type
+            #'loss_symm' : loss_symm,
         }
 
     @torch.no_grad()
@@ -910,15 +911,15 @@ class CSPDiffusion(BaseModule):
         loss_lattice = output_dict['loss_lattice']
         loss_coord = output_dict['loss_coord']
         loss_type = output_dict['loss_type']
-        loss_symm = output_dict['loss_symm']
+        #loss_symm = output_dict['loss_symm']
         loss = output_dict['loss']
 
         log_dict = {
             f'{prefix}_loss': loss,
             f'{prefix}_lattice_loss': loss_lattice,
             f'{prefix}_coord_loss': loss_coord,
-            f'{prefix}_type_loss': loss_type,
-            f'{prefix}_symm_loss': loss_symm,
+            f'{prefix}_type_loss': loss_type
+            #f'{prefix}_symm_loss': loss_symm,
         }
 
         return log_dict, loss
