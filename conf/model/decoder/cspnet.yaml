@@ -1,7 +1,8 @@
 _target_: diffcsp.pl_modules.cspnet.CSPNet
 network:  gnn # transformer
 hidden_dim: 512
-latent_dim: 0
+latent_dim: ${model.latent_dim}
+time_dim: ${model.time_dim}
 max_atoms: 94
 num_layers: 6
 act_fn: silu
@@ -17,3 +18,4 @@ use_gt_frac_coords: ${model.use_gt_frac_coords}
 use_site_symm: ${model.use_site_symm}
 use_atom_weighting: ${model.use_atom_weighting}
 site_symm_matrix_embed: False
+heads: 8

@@ -32,9 +32,9 @@ from diffcsp.common.data_utils import (
 
 from diffcsp.pl_modules.diff_utils import d_log_p_wrapped_normal
 from diffcsp.pl_modules.model import build_mlp
-from scripts.generation import SampleDataset
-from scripts.compute_metrics import Crystal, GenEval, get_gt_crys_ori
-from scripts.eval_utils import lattices_to_params_shape,  get_crystals_list
+from generation import SampleDataset
+from compute_metrics import Crystal, GenEval, get_gt_crys_ori
+from eval_utils import lattices_to_params_shape,  get_crystals_list
 
 
 MAX_ATOMIC_NUM=94
@@ -467,12 +467,13 @@ class CSPDiffusion(BaseModule):
         # NOTE: set pred_site_symm_type to True to generate site symmetries also (set it to False to behave as DiffCSP)
         # pred_type is set to True to generate atom types
         mask_token = 1 if self.hparams.prior == 'masked' else 0 
-        self.decoder = hydra.utils.instantiate(self.hparams.decoder, latent_dim = self.hparams.latent_dim + self.hparams.time_dim, pred_type = True, pred_site_symm_type = True, smooth = True, max_atoms=MAX_ATOMIC_NUM+mask_token, mask_token=mask_token)
+        self.decoder = hydra.utils.instantiate(self.hparams.decoder, time_dim=self.hparams.time_dim + self.hparams.latent_dim, latent_dim = self.hparams.latent_dim, pred_type = True, pred_site_symm_type = True, smooth = True, max_atoms=MAX_ATOMIC_NUM+mask_token, mask_token=mask_token)
         self.beta_scheduler = hydra.utils.instantiate(self.hparams.beta_scheduler).to(self.device)
         self.sigma_scheduler = hydra.utils.instantiate(self.hparams.sigma_scheduler).to(self.device)
         self.time_dim = self.hparams.time_dim
+        self.latent_dim = self.hparams.latent_dim
         self.time_embedding = SinusoidalTimeEmbeddings(self.time_dim)
-        self.spacegroup_embedding = build_mlp(in_dim=SG_CONDITION_DIM, hidden_dim=128, fc_num_layers=2, out_dim=self.time_dim)
+        self.spacegroup_embedding = build_mlp(in_dim=SG_CONDITION_DIM, hidden_dim=128, fc_num_layers=2, out_dim=self.latent_dim)
         self.keep_lattice = self.hparams.cost_lattice < 1e-5
         self.keep_coords = self.hparams.cost_coord < 1e-5
         self.use_ks = self.hparams.use_ks
@@ -509,7 +510,8 @@ class CSPDiffusion(BaseModule):
         site_symms, node_mask = to_dense_batch(site_symm.flatten(-2, -1), batch.batch, fill_value=0)
         gt_spacegroup_onehot = F.one_hot(batch.spacegroup - 1, num_classes=N_SPACEGROUPS).float()
         times = self.beta_scheduler.uniform_sample_t(batch_size, self.device)
-        time_emb = torch.cat([self.time_embedding(times), self.spacegroup_embedding(batch.sg_condition.reshape(-1, SG_CONDITION_DIM))], dim=-1)
+        spacegroup_emb = self.spacegroup_embedding(batch.sg_condition.reshape(-1, SG_CONDITION_DIM))
+        time_emb = torch.cat([self.time_embedding(times), spacegroup_emb], dim=-1)
         alphas_cumprod = self.beta_scheduler.alphas_cumprod[times]
 
         c0 = torch.sqrt(alphas_cumprod)
@@ -636,7 +638,8 @@ class CSPDiffusion(BaseModule):
             # get diffusion timestep embeddings, concatenated with spacegroup condition    
             #gt_spacegroup_onehot = F.one_hot(batch.spacegroup - 1, num_classes=N_SPACEGROUPS).float()
             #time_emb = torch.cat([self.time_embedding(times), self.spacegroup_embedding(gt_spacegroup_onehot)], dim=-1)
-            time_emb = torch.cat([self.time_embedding(times), self.spacegroup_embedding(batch.sg_condition.reshape(-1, SG_CONDITION_DIM))], dim=-1)
+            spacegroup_emb = self.spacegroup_embedding(batch.sg_condition.reshape(-1, SG_CONDITION_DIM))
+            time_emb = torch.cat([self.time_embedding(times), spacegroup_emb], dim=-1)
 
             alphas = self.beta_scheduler.alphas[t]
             alphas_cumprod = self.beta_scheduler.alphas_cumprod[t]
@@ -838,10 +841,10 @@ class CSPDiffusion(BaseModule):
         test_set = SampleDataset(
                             eval_model_name_dataset[self.hparams.data.eval_model_name], 
                             self.hparams.data.eval_generate_samples, 
-                            self.hparams.data.datamodule.datasets.train.save_path)
+                            self.hparams.data.datamodule.datasets.train.save_path,
+                            self.hparams.data.datamodule.datasets.train.sg_info_path,)
         
         test_loader = DataLoader(test_set, batch_size = 50)
-        
         frac_coords = []
         num_atoms = []
         atom_types = []

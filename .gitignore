@@ -161,6 +161,7 @@ cython_debug/
 output/
 *.pt
 
+checkpoints/
 cdvae/
 .vscode/
 perov_sweep_output/
@@ -182,3 +183,5 @@ logs/*
 batch_run_eval.sh
 make_dataset.sh
 *.ipynb
+
+*.DS_Store

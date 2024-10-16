@@ -133,6 +133,7 @@ class CSPNet(nn.Module):
         network='gnn',
         hidden_dim = 128,
         latent_dim = 256,
+        time_dim = 256,
         num_layers = 4,
         max_atoms = 100,
         act_fn = 'silu',
@@ -151,7 +152,8 @@ class CSPNet(nn.Module):
         pred_site_symm_type = False,
         use_atom_weighting = False,
         site_symm_matrix_embed=False,
-        mask_token=False
+        mask_token=False,
+        heads=8
     ):
         super(CSPNet, self).__init__()
 
@@ -162,6 +164,7 @@ class CSPNet(nn.Module):
         self.use_site_symm = use_site_symm
         self.use_atom_weighting = use_atom_weighting
         self.mask_token = 1 if mask_token else 0
+        self.heads = heads
         assert self.use_ks != self.ip # Cannot use both inner product representation and k representation
         if self.smooth:
             self.node_embedding = nn.Linear(max_atoms, hidden_dim)
@@ -178,7 +181,6 @@ class CSPNet(nn.Module):
             self.site_symm_embedding = nn.Linear(self.site_symm_dim, latent_dim)
 
         lattice_dim = 9 if self.ip else 6
-        frac_coord_dim = 3 if self.use_gt_frac_coords else 0
         if act_fn == 'silu':
             self.act_fn = nn.SiLU()
         if dis_emb == 'sin':
@@ -187,7 +189,9 @@ class CSPNet(nn.Module):
             self.dis_emb = None
         if self.use_gt_frac_coords and self.dis_emb:
             frac_coord_dim = self.dis_emb.dim
-        self.atom_latent_emb = nn.Linear(hidden_dim + 2*latent_dim + (latent_dim if self.use_site_symm else 0) + frac_coord_dim, hidden_dim)
+        else:
+            frac_coord_dim = 3 if self.use_gt_frac_coords else 0
+        self.atom_latent_emb = nn.Linear(hidden_dim + time_dim + (latent_dim if self.use_site_symm else 0) + frac_coord_dim, hidden_dim)
         for i in range(0, num_layers):
             if network == 'gnn':
                 self.add_module(
@@ -195,7 +199,7 @@ class CSPNet(nn.Module):
                 )  
             elif network == 'transformer':
                 self.add_module(
-                    "csp_layer_%d" % i, TransformerLayer(hidden_dim, heads=8, concat=False, ln=ln, dis_emb=self.dis_emb, act_fn=self.act_fn)
+                    "csp_layer_%d" % i, TransformerLayer(hidden_dim, heads=self.heads, concat=False, ln=ln, dis_emb=self.dis_emb, act_fn=self.act_fn)
                 )   
         self.network = network       
         self.num_layers = num_layers
