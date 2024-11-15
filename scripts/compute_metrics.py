@@ -33,7 +33,7 @@ from pyxtal import pyxtal
 import pickle
 
 warnings.simplefilter("ignore")
-from eval_utils import (
+from scripts.eval_utils import (
     smact_validity, structure_validity, CompScaler, get_fp_pdist,
     load_config, load_data, get_crystals_list, prop_model_eval, compute_cov)
 

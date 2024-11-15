@@ -34,7 +34,7 @@ POINT = np.array([0.5, 0.5, 0.5]) + EPS
 
 import sys
 sys.path.append('.')
-from eval_utils import load_model, lattices_to_params_shape, get_crystals_list
+from scripts.eval_utils import load_model, lattices_to_params_shape, get_crystals_list
 
 
 train_dist = {

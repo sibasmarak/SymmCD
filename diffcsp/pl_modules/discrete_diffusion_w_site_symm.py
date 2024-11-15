@@ -13,7 +13,6 @@ from torch_geometric.data import DataLoader
 
 from collections import defaultdict
 from typing import Any, Dict, List
-
 import hydra
 import omegaconf
 import pytorch_lightning as pl
@@ -32,9 +31,9 @@ from diffcsp.common.data_utils import (
 
 from diffcsp.pl_modules.diff_utils import d_log_p_wrapped_normal
 from diffcsp.pl_modules.model import build_mlp
-from generation import SampleDataset
-from compute_metrics import Crystal, GenEval, get_gt_crys_ori
-from eval_utils import lattices_to_params_shape,  get_crystals_list
+from scripts.generation import SampleDataset
+from scripts.compute_metrics import Crystal, GenEval, get_gt_crys_ori
+from scripts.eval_utils import lattices_to_params_shape,  get_crystals_list
 
 
 MAX_ATOMIC_NUM=94
@@ -276,9 +275,9 @@ class DiscreteNoise(nn.Module):
         return loss_a, loss_ss
 
 class DiscreteNoiseMarginal(DiscreteNoise):
-    def __init__(self, data_root_path, beta_scheduler):
-        atom_type_prior = torch.load(data_root_path + '/train_atom_types_marginals.pt')
-        site_symm_prior_per_sg = torch.load(data_root_path + '/train_site_symm_marginals_per_sg.pt')
+    def __init__(self, atom_marginals_path, ss_marginals_path, beta_scheduler):
+        atom_type_prior = torch.load(atom_marginals_path)
+        site_symm_prior_per_sg = torch.load(ss_marginals_path)
         P_ss = nn.ParameterList([nn.Parameter(site_symm_prior_per_sg[i].unsqueeze(-2).expand(NUM_SPACEGROUPS, SITE_SYMM_PGS, SITE_SYMM_PGS).clone(), requires_grad=False) for i in range(SITE_SYMM_AXES)])
         P_a = nn.Parameter(atom_type_prior.unsqueeze(0).expand(MAX_ATOMIC_NUM, -1).clone(), requires_grad=False)
         super().__init__(atom_type_prior, site_symm_prior_per_sg, beta_scheduler, P_ss, P_a)
@@ -342,12 +341,15 @@ def modify_frac_coords_one(frac_coords, site_symm, atom_types, spacegroup):
 
     # iterate over frac coords and corresponding site-symm
     new_frac_coords, new_atom_types, new_site_symm = [], [], []
+    min_ss_dists = []
+    wp_projection_dists = []
     for (sym, frac_coord, atm_type) in zip(site_symm_axis, frac_coords, atom_types):
         frac_coord = frac_coord.cpu().detach().numpy()
 
         # Get all WPs that are closest in terms of site symmetry
         wp_to_ss_dist = {wp: torch.norm(sym.flatten() - ss.flatten()) for wp, ss in wp_to_site_symm.items()}
         min_ss_dist = min(wp_to_ss_dist.values())
+        min_ss_dists.append(min_ss_dist.item())
         closest_ss_wps = [wp for wp, dist in wp_to_ss_dist.items() if dist==min_ss_dist]
 
         # For each WP find closest position in space
@@ -361,7 +363,7 @@ def modify_frac_coords_one(frac_coords, site_symm, atom_types, spacegroup):
             closest = sorted(closes, key=lambda x: x[-1])[0]
             wyckoff = closest[1]
             repr_index = closest[2]
-            
+            wp_projection_dists.append(closest[3])
             # use wp operations on frac_coord
             frac_coord = closest[0]
             for index in range(len(wyckoff)):
@@ -378,7 +380,7 @@ def modify_frac_coords_one(frac_coords, site_symm, atom_types, spacegroup):
     new_frac_coords = np.stack(new_frac_coords)
     new_atom_types = np.stack(new_atom_types)
     new_site_symm = np.stack(new_site_symm)
-    return new_frac_coords, len(new_frac_coords), new_atom_types, new_site_symm
+    return new_frac_coords, len(new_frac_coords), new_atom_types, new_site_symm, min_ss_dists, wp_projection_dists
 
 
 def modify_frac_coords(traj:Dict, spacegroups:List[int], num_repr:List[int]) -> Dict:
@@ -388,12 +390,13 @@ def modify_frac_coords(traj:Dict, spacegroups:List[int], num_repr:List[int]) -> 
     updated_num_atoms = []
     updated_atom_types = []
     updated_site_symm = []
+    min_ss_dists, wp_projection_dists = [], []
     
     for index in range(len(num_repr)):
         if num_repr[index] > 0:
             # if something is predicted, otherwise it is an empty crystal which we are post-processing
             # this might happen if we predict a crystal with only dummy representative atoms
-            new_frac_coords, new_num_atoms, new_atom_types, new_site_sym = modify_frac_coords_one(
+            new_frac_coords, new_num_atoms, new_atom_types, new_site_sym,  min_ss_dist, wp_projection_dist = modify_frac_coords_one(
                     traj['frac_coords'][total_atoms:total_atoms+num_repr[index]], # num_repr x 3
                     traj['site_symm'][total_atoms:total_atoms+num_repr[index]], # num_repr x 195
                     traj['atom_types'][total_atoms:total_atoms+num_repr[index]], # num_repr x 100
@@ -405,6 +408,8 @@ def modify_frac_coords(traj:Dict, spacegroups:List[int], num_repr:List[int]) -> 
                 updated_num_atoms.append(new_num_atoms)
                 updated_atom_types.append(new_atom_types)
                 updated_site_symm.append(new_site_sym)
+                min_ss_dists.append(min_ss_dist)
+                wp_projection_dists.append(wp_projection_dist)
         
         total_atoms += num_repr[index]
     
@@ -412,6 +417,8 @@ def modify_frac_coords(traj:Dict, spacegroups:List[int], num_repr:List[int]) -> 
     traj['atom_types'] = torch.cat([torch.from_numpy(x) for x in updated_atom_types]).to(device)
     traj['num_atoms'] = torch.tensor(updated_num_atoms).to(device)
     traj['site_symm'] = torch.cat([torch.from_numpy(x) for x in updated_site_symm]).to(device)
+    traj['min_ss_dists'] = min_ss_dists
+    traj['wp_projection_dists'] = wp_projection_dists
 
     
     return traj
@@ -494,7 +501,8 @@ class CSPDiffusion(BaseModule):
 
     def init_discrete_noise(self, prior='marginal'):
         if prior == 'marginal':
-            return DiscreteNoiseMarginal(self.hparams.data.root_path, self.beta_scheduler)
+            return DiscreteNoiseMarginal(self.hparams.data.datamodule.atom_marginals_path,
+                                         self.hparams.data.datamodule.ss_marginals_path, self.beta_scheduler)
         elif prior == 'masked':
             return DiscreteNoiseMasked(self.beta_scheduler)
 

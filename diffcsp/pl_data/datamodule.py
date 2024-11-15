@@ -1,7 +1,7 @@
 import random
 from typing import Optional, Sequence
 from pathlib import Path
-
+import os
 import hydra
 import numpy as np
 import omegaconf
@@ -12,7 +12,7 @@ from torch.utils.data import Dataset
 from torch_geometric.data import DataLoader
 
 from diffcsp.common.utils import PROJECT_ROOT
-from diffcsp.common.data_utils import get_scaler_from_data_list
+from diffcsp.common.data_utils import get_scaler_from_data_list, save_site_symm_and_atom_type_marginals
 
 
 def worker_init_fn(id: int):
@@ -40,6 +40,8 @@ class CrystDataModule(pl.LightningDataModule):
         num_workers: DictConfig,
         batch_size: DictConfig,
         scaler_path=None,
+        atom_marginals_path=None,
+        ss_marginals_path=None
     ):
         super().__init__()
         self.datasets = datasets
@@ -50,16 +52,18 @@ class CrystDataModule(pl.LightningDataModule):
         self.val_datasets: Optional[Sequence[Dataset]] = None
         self.test_datasets: Optional[Sequence[Dataset]] = None
 
-        self.get_scaler(scaler_path)
+        self.get_scaler_and_marginals(scaler_path, atom_marginals_path, ss_marginals_path)
 
     def prepare_data(self) -> None:
         # download only
         pass
 
-    def get_scaler(self, scaler_path):
+    def get_scaler_and_marginals(self, scaler_path, atom_marginals_path, ss_marginals_path):
         # Load once to compute property scaler
-        if scaler_path is None:
+        are_marginals_available = os.path.exists(atom_marginals_path) and os.path.exists(ss_marginals_path)
+        if scaler_path is None or not are_marginals_available:
             train_dataset = hydra.utils.instantiate(self.datasets.train)
+        if scaler_path is None:
             self.lattice_scaler = get_scaler_from_data_list(
                 train_dataset.cached_data,
                 key='scaled_lattice')
@@ -70,6 +74,10 @@ class CrystDataModule(pl.LightningDataModule):
             self.lattice_scaler = torch.load(
                 Path(scaler_path) / 'lattice_scaler.pt')
             self.scaler = torch.load(Path(scaler_path) / 'prop_scaler.pt')
+        if not are_marginals_available:
+            train_dataset.lattice_scaler = self.lattice_scaler
+            train_dataset.scaler = self.scaler
+            save_site_symm_and_atom_type_marginals(atom_marginals_path, ss_marginals_path, train_dataset)
 
     def setup(self, stage: Optional[str] = None):
         """

@@ -28,7 +28,8 @@ eval_generate_samples: 100
 
 datamodule:
   _target_: diffcsp.pl_data.datamodule.CrystDataModule
-
+  atom_marginals_path: ${data.root_path}/train_atom_types_marginals.pt
+  ss_marginals_path: ${data.root_path}/train_site_symm_marginals_per_sg.pt
   datasets:
     train:
       _target_: diffcsp.pl_data.dataset.CrystDataset
@@ -48,7 +49,6 @@ datamodule:
       preprocess_workers: ${data.preprocess_workers}
       gt_prop_eval_path:  ${data.root_path}/train_${data.eval_model_name}_${data.prop}.pt
       sg_info_path: ${data.root_path}/sg_info.pt
-
     val:
       - _target_: diffcsp.pl_data.dataset.CrystDataset
         name: Formation energy val
