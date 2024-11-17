@@ -12,7 +12,6 @@ ip: false
 use_ks: true
 use_gt_frac_coords: true
 use_site_symm: true
-use_atom_weighting: false
 prior: marginal
 
 defaults:

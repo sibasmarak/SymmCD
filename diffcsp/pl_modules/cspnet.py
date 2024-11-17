@@ -173,7 +173,6 @@ class CSPNet(nn.Module):
         smooth = False,
         pred_type = False,
         pred_site_symm_type = False,
-        use_atom_weighting = False,
         site_symm_matrix_embed=False,
         mask_token=False,
         heads=8
@@ -185,7 +184,6 @@ class CSPNet(nn.Module):
         self.use_ks = use_ks
         self.use_gt_frac_coords = use_gt_frac_coords
         self.use_site_symm = use_site_symm
-        self.use_atom_weighting = use_atom_weighting
         self.mask_token = 1 if mask_token else 0
         self.heads = heads
         assert self.use_ks != self.ip # Cannot use both inner product representation and k representation
@@ -246,8 +244,6 @@ class CSPNet(nn.Module):
                 self.symm_wise_out = nn.Linear(hidden_dim, self.n_ss*self.ss_matrix_out_dim)
             else:
                 self.site_symm_out = nn.Linear(hidden_dim, self.site_symm_dim)
-        if self.use_atom_weighting:
-            self.pred_gt_site_symm = nn.Linear(hidden_dim + self.site_symm_dim, self.site_symm_dim)    
 
     def select_symmetric_edges(self, tensor, mask, reorder_idx, inverse_neg):
         # Mask out counter-edges
@@ -407,11 +403,7 @@ class CSPNet(nn.Module):
                 site_symm_out = (axis_embs @ symm_embs.swapaxes(-1, -2)).flatten()
             else:
                 site_symm_out = self.site_symm_out(node_features)
-            if self.use_atom_weighting:
-                pred_gt_site_symm = self.pred_gt_site_symm(torch.cat([node_features, site_symm_probs], dim=1))
-                return lattice_out, coord_out, type_out, site_symm_out.reshape(-1, self.site_symm_dim), pred_gt_site_symm
-            else:
-                return lattice_out, coord_out, type_out, site_symm_out.reshape(-1, self.site_symm_dim)
+            return lattice_out, coord_out, type_out, site_symm_out.reshape(-1, self.site_symm_dim)
         if self.pred_type and not self.pred_site_symm_type:
             type_out = self.type_out(node_features)
             return lattice_out, coord_out, type_out
