@@ -86,7 +86,6 @@ class CSPLayer(nn.Module):
         return edge_features
 
     def node_model(self, node_features, edge_features, edge_index):
-        torch.use_deterministic_algorithms(False) # NOTE: see if this is necessary later
         agg = scatter(edge_features, edge_index[0], dim = 0, reduce='mean', dim_size=node_features.shape[0])
         agg = torch.cat([node_features, agg], dim = 1)
         out = self.node_mlp(agg)
@@ -114,7 +113,6 @@ class TransformerLayer(nn.Module):
             self.layer_norm = nn.LayerNorm(hidden_dim)
 
     def forward(self, node_features, frac_coords, lattice_feats, edge_index, node2graph, frac_diff = None):
-        torch.use_deterministic_algorithms(False) # NOTE: see if this is necessary later
         edge_features = self.dis_emb(frac_diff)
         node_input = node_features
         if self.ln:

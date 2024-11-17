@@ -22,10 +22,6 @@ from symmcd.common.utils import log_hyperparameters, PROJECT_ROOT
 
 import wandb
 
-# NOTE: received this warning
-# You are using a CUDA device ('NVIDIA A100-SXM4-80GB') that has Tensor Cores. 
-# To properly utilize them, you should set `torch.set_float32_matmul_precision('medium' | 'high')` which will trade-off precision for performance. 
-# For more details, read https://pytorch.org/docs/stable/generated/torch.set_float32_matmul_precision.html#torch.set_float32_matmul_precision
 torch.set_float32_matmul_precision('high')
 
 def build_callbacks(cfg: DictConfig, hydra_dir: Path) -> List[Callback]:
@@ -55,7 +51,7 @@ def build_callbacks(cfg: DictConfig, hydra_dir: Path) -> List[Callback]:
         hydra.utils.log.info("Adding callback <ModelCheckpoint>")
         callbacks.append(
             ModelCheckpoint(
-                dirpath=hydra_dir, # Path(HydraConfig.get().run.dir),
+                dirpath=hydra_dir,
                 monitor=cfg.train.monitor_metric,
                 mode=cfg.train.monitor_metric_mode,
                 save_top_k=cfg.train.model_checkpoints.save_top_k,
@@ -168,9 +164,6 @@ def run(cfg: DictConfig) -> None:
         callbacks=callbacks,
         deterministic=cfg.train.deterministic,
         check_val_every_n_epoch=cfg.logging.val_check_interval,
-        #strategy=DDPStrategy(find_unused_parameters=True),
-        # progress_bar_refresh_rate=cfg.logging.progress_bar_refresh_rate, #NOTE: No longer viable in new PyTorch Lightning version
-        # resume_from_checkpoint=ckpt,#NOTE: No longer viable in new PyTorch Lightning version
         **cfg.train.pl_trainer,
     )
 

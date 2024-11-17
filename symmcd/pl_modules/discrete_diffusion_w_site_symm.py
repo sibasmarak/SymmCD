@@ -471,8 +471,6 @@ class CSPDiffusion(BaseModule):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         
-        # NOTE: set pred_site_symm_type to True to generate site symmetries also (set it to False to behave as DiffCSP)
-        # pred_type is set to True to generate atom types
         mask_token = 1 if self.hparams.prior == 'masked' else 0 
         self.decoder = hydra.utils.instantiate(self.hparams.decoder, time_dim=self.hparams.time_dim + self.hparams.latent_dim, latent_dim = self.hparams.latent_dim, pred_type = True, pred_site_symm_type = True, smooth = True, max_atoms=MAX_ATOMIC_NUM+mask_token, mask_token=mask_token)
         self.beta_scheduler = hydra.utils.instantiate(self.hparams.beta_scheduler).to(self.device)
@@ -764,8 +762,6 @@ class CSPDiffusion(BaseModule):
 
 
         # drop all dummy elements (atom types = MAX_ATOMIC_NUM)
-        # NOTE: add breakpoint() here if you want to check (traj[0]['atom_types'].sum(dim=1) can give you sum of atom types values)
-        #dummy_ind = (traj[0]['atom_types'].argmax(dim=-1) + 1 == self.discrete_noise.max_atomic_num).long()
         dummy_ind = (traj[0]['atom_types'].argmax(dim=-1) == self.discrete_noise.max_atomic_num).long()
         traj[0]['frac_coords'] = traj[0]['frac_coords'][(1 - dummy_ind).bool()]
         traj[0]['atom_types'] = traj[0]['atom_types'][(1 - dummy_ind).bool()]

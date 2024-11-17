@@ -97,12 +97,10 @@ def modify_frac_coords_one(frac_coords, site_symm, atom_types, spacegroup):
             # use wp operations on frac_coord
             frac_coord = closest[0]
             for index in range(len(wyckoff)): 
-                # new_frac_coords.append(wyckoff[index].operate(frac_coord)%1.)
                 new_frac_coords.append(wyckoff[(index + repr_index) % len(wyckoff)].operate(frac_coord)%1.)
                 new_atom_types.append(atm_type.cpu().detach().numpy())
                 new_site_symm.append(sym)
         except:
-            # print('Weird things happen, and I did not predict correctly')
             new_frac_coords.append(frac_coord)
             new_atom_types.append(atm_type.cpu().detach().numpy())
             new_site_symm.append(sym.cpu().detach().numpy())
@@ -122,12 +120,10 @@ def modify_frac_coords(traj:Dict, spacegroups:List[int], num_repr:List[int]) -> 
     print("Replicating atoms based on site symmetries")
     for index in tqdm(range(len(num_repr))):
         if num_repr[index] > 0:
-            # if something is predicted, otherwise it is an empty crystal which we are post-processing
-            # this might happen if we predict a crystal with only dummy representative atoms
             new_frac_coords, new_num_atoms, new_atom_types, new_site_sym = modify_frac_coords_one(
-                    traj['frac_coords'][total_atoms:total_atoms+num_repr[index]], # num_repr x 3
-                    traj['site_symm'][total_atoms:total_atoms+num_repr[index]], # num_repr x 27
-                    traj['atom_types'][total_atoms:total_atoms+num_repr[index]], # num_repr x 100
+                    traj['frac_coords'][total_atoms:total_atoms+num_repr[index]],
+                    traj['site_symm'][total_atoms:total_atoms+num_repr[index]], 
+                    traj['atom_types'][total_atoms:total_atoms+num_repr[index]], 
                     spacegroups[index], 
                 )
             if new_num_atoms:
@@ -192,9 +188,7 @@ class SinusoidalTimeEmbeddings(nn.Module):
 class CSPDiffusion(BaseModule):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        
-        # NOTE: set pred_site_symm_type to True to generate site symmetries also (set it to False to behave as DiffCSP)
-        # pred_type is set to True to generate atom types
+
         self.decoder = hydra.utils.instantiate(self.hparams.decoder, latent_dim = self.hparams.latent_dim + self.hparams.time_dim, pred_type = True, pred_site_symm_type = True, smooth = True, max_atoms=MAX_ATOMIC_NUM)
         self.beta_scheduler = hydra.utils.instantiate(self.hparams.beta_scheduler)
         self.sigma_scheduler = hydra.utils.instantiate(self.hparams.sigma_scheduler)
@@ -228,30 +222,6 @@ class CSPDiffusion(BaseModule):
 
         batch_size = batch.num_graphs
         
-        # replicate during the training 
-        # if self.training:
-        #     spacegroup = batch.spacegroup.repeat_interleave(batch.num_atoms)
-        #     site_symm = batch.site_symm
-            
-        #     affine_matrices = []
-        #     for sg, symm, orbit_size in zip(spacegroup, site_symm, batch.x_loss_coeff): 
-        #         affine_matrix = spacegroup_ops_mapper[sg.item()][tuple(symm.cpu().detach().numpy())]
-        #         affine_matrices.append(affine_matrix)
-        #         assert orbit_size.item() == affine_matrix.shape[0], breakpoint()
-        #     affine_matrices = torch.cat(affine_matrices, dim=0).to(self.device)
-                
-        #     # repeating the frac coords as per size of orbits
-        #     frac_coords = torch.repeat_interleave(batch.frac_coords, batch.x_loss_coeff.squeeze(), dim=0)
-            
-        #     assert frac_coords.shape[0] == affine_matrices.shape[0], breakpoint()
-            
-        #     frac_coords_homogeneous = torch.cat((frac_coords, torch.ones(frac_coords.shape[0], 1).to(self.device)), dim=1)
-        #     frac_coords_homogeneous = frac_coords_homogeneous.unsqueeze(-1)
-        #     transformed_coords = torch.bmm(affine_matrices, frac_coords_homogeneous)
-        #     frac_coords = transformed_coords[:, :3, 0]
-           
-        # get diffusion timestep embeddings, concatenated with spacegroup condition    
-        # gt_spacegroup_onehot = F.one_hot(batch.spacegroup - 1, num_classes=N_SPACEGROUPS).float()
         times = self.beta_scheduler.uniform_sample_t(batch_size, self.device)
         time_emb = self.time_embedding(times) + self.spacegroup_embedding(batch.sg_condition.reshape(-1, SG_CONDITION_DIM))
 
@@ -396,8 +366,7 @@ class CSPDiffusion(BaseModule):
 
             times = torch.full((batch_size, ), t, device = self.device)
 
-            # get diffusion timestep embeddings, concatenated with spacegroup condition    
-            # gt_spacegroup_onehot = F.one_hot(batch.spacegroup - 1, num_classes=N_SPACEGROUPS).float()
+            # get diffusion timestep embeddings, concatenated with spacegroup condition 
             time_emb = self.time_embedding(times) + self.spacegroup_embedding(batch.sg_condition.reshape(-1, SG_CONDITION_DIM))
             
             alphas = self.beta_scheduler.alphas[t]
@@ -527,7 +496,6 @@ class CSPDiffusion(BaseModule):
 
 
         # drop all dummy elements (atom types = MAX_ATOMIC_NUM)
-        # NOTE: add breakpoint() here if you want to check (traj[0]['atom_types'].sum(dim=1) can give you sum of atom types values)
         dummy_ind = (traj[0]['atom_types'].argmax(dim=-1) + 1 == MAX_ATOMIC_NUM).long()
         traj[0]['frac_coords'] = traj[0]['frac_coords'][(1 - dummy_ind).bool()]
         traj[0]['atom_types'] = traj[0]['atom_types'][(1 - dummy_ind).bool()]
@@ -542,7 +510,6 @@ class CSPDiffusion(BaseModule):
         traj[0]['lattices'] = traj[0]['lattices'][(1 - empty_crystals).bool()]
         print(f"Number of empty crystals generated: {empty_crystals.sum().item()}/{batch_size}")
         # use predicted site symmetry to create copies of atoms
-        # frac coords, atom types and num atoms removed for empty crystals in modify_frac_coords()
         traj[0] = modify_frac_coords(traj[0], batch.spacegroup, traj[0]['num_atoms'])
         
         # sanity checks for size of tensors
@@ -603,7 +570,7 @@ class CSPDiffusion(BaseModule):
     def simple_gen_evaluation(self):
         
         eval_model_name_dataset = {
-            "mp20": "mp", # encompasses mp20, mpsa52
+            "mp20": "mp", # encompasses mp20, mpts52
             "perovskite": "perov",
             "carbon": "carbon",
         }
