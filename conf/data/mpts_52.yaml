@@ -14,16 +14,22 @@ otf_graph: false
 eval_model_name: mp20
 tolerance: 0.1
 
-use_space_group: false
+use_space_group: true
 use_pos_index: false
 train_max_epochs: 500
 early_stopping_patience: 100000
 teacher_forcing_max_epoch: 300
 
+number_representatives: 0
+use_random_representatives: false
+eval_every_epoch: 10
+eval_generate_samples: 100
 
 datamodule:
   _target_: diffcsp.pl_data.datamodule.CrystDataModule
-
+  scaler_path: ${data.root_path}
+  atom_marginals_path: ${data.root_path}/train_atom_types_marginals.pt
+  ss_marginals_path: ${data.root_path}/train_site_symm_marginals_per_sg.pt
   datasets:
     train:
       _target_: diffcsp.pl_data.dataset.CrystDataset
@@ -37,13 +43,17 @@ datamodule:
       tolerance: ${data.tolerance}
       use_space_group: ${data.use_space_group}
       use_pos_index: ${data.use_pos_index}
+      number_representatives: ${data.number_representatives}
+      use_random_representatives: ${data.use_random_representatives}
       lattice_scale_method: ${data.lattice_scale_method}
       preprocess_workers: ${data.preprocess_workers}
-
+      gt_prop_eval_path:  ${data.root_path}/train_${data.eval_model_name}_${data.prop}.pt
+      sg_info_path: ${data.root_path}/sg_info.pt
     val:
       - _target_: diffcsp.pl_data.dataset.CrystDataset
         name: Formation energy val
         path: ${data.root_path}/val.csv
+        gt_crys_path: ${data.root_path}/val_gt_crys.pt
         save_path: ${data.root_path}/val_ori.pt
         prop: ${data.prop}
         niggli: ${data.niggli}
@@ -52,13 +62,17 @@ datamodule:
         tolerance: ${data.tolerance}
         use_space_group: ${data.use_space_group}
         use_pos_index: ${data.use_pos_index}
+        number_representatives: ${data.number_representatives}
+        use_random_representatives: ${data.use_random_representatives}
         lattice_scale_method: ${data.lattice_scale_method}
         preprocess_workers: ${data.preprocess_workers}
+        gt_prop_eval_path:  ${data.root_path}/val_${data.eval_model_name}_${data.prop}.pt
 
     test:
       - _target_: diffcsp.pl_data.dataset.CrystDataset
         name: Formation energy test
         path: ${data.root_path}/test.csv
+        gt_crys_path: ${data.root_path}/test_gt_crys.pt
         save_path: ${data.root_path}/test_ori.pt
         prop: ${data.prop}
         niggli: ${data.niggli}
@@ -67,15 +81,18 @@ datamodule:
         tolerance: ${data.tolerance}
         use_space_group: ${data.use_space_group}
         use_pos_index: ${data.use_pos_index}
+        number_representatives: ${data.number_representatives}
+        use_random_representatives: ${data.use_random_representatives}
         lattice_scale_method: ${data.lattice_scale_method}
         preprocess_workers: ${data.preprocess_workers}
+        gt_prop_eval_path:  ${data.root_path}/test_${data.eval_model_name}_${data.prop}.pt
 
   num_workers:
-    train: 0
-    val: 0
-    test: 0
+    train: 4
+    val: 4
+    test: 4
 
   batch_size:
     train: 128
-    val: 128
-    test: 128
+    val: 32
+    test: 32

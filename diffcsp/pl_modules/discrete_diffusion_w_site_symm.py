@@ -13,7 +13,6 @@ from torch_geometric.data import DataLoader
 
 from collections import defaultdict
 from typing import Any, Dict, List
-
 import hydra
 import omegaconf
 import pytorch_lightning as pl
@@ -277,9 +276,9 @@ class DiscreteNoise(nn.Module):
         return loss_a#, loss_ss
 
 class DiscreteNoiseMarginal(DiscreteNoise):
-    def __init__(self, data_root_path, beta_scheduler):
-        atom_type_prior = torch.load(data_root_path + '/train_atom_types_marginals.pt')
-        site_symm_prior_per_sg = torch.load(data_root_path + '/train_site_symm_marginals_per_sg.pt')
+    def __init__(self, atom_marginals_path, ss_marginals_path, beta_scheduler):
+        atom_type_prior = torch.load(atom_marginals_path)
+        site_symm_prior_per_sg = torch.load(ss_marginals_path)
         P_ss = nn.ParameterList([nn.Parameter(site_symm_prior_per_sg[i].unsqueeze(-2).expand(NUM_SPACEGROUPS, SITE_SYMM_PGS, SITE_SYMM_PGS).clone(), requires_grad=False) for i in range(SITE_SYMM_AXES)])
         P_a = nn.Parameter(atom_type_prior.unsqueeze(0).expand(MAX_ATOMIC_NUM, -1).clone(), requires_grad=False)
         super().__init__(atom_type_prior, site_symm_prior_per_sg, beta_scheduler, P_ss, P_a)
@@ -343,12 +342,15 @@ def modify_frac_coords_one(frac_coords, site_symm, atom_types, spacegroup):
 
     # iterate over frac coords and corresponding site-symm
     new_frac_coords, new_atom_types, new_site_symm = [], [], []
+    min_ss_dists = []
+    wp_projection_dists = []
     for (sym, frac_coord, atm_type) in zip(site_symm_axis, frac_coords, atom_types):
         frac_coord = frac_coord.cpu().detach().numpy()
 
         # Get all WPs that are closest in terms of site symmetry
         wp_to_ss_dist = {wp: torch.norm(sym.flatten() - ss.flatten()) for wp, ss in wp_to_site_symm.items()}
         min_ss_dist = min(wp_to_ss_dist.values())
+        min_ss_dists.append(min_ss_dist.item())
         closest_ss_wps = [wp for wp, dist in wp_to_ss_dist.items() if dist==min_ss_dist]
 
         # For each WP find closest position in space
@@ -362,7 +364,7 @@ def modify_frac_coords_one(frac_coords, site_symm, atom_types, spacegroup):
             closest = sorted(closes, key=lambda x: x[-1])[0]
             wyckoff = closest[1]
             repr_index = closest[2]
-            
+            wp_projection_dists.append(closest[3])
             # use wp operations on frac_coord
             frac_coord = closest[0]
             for index in range(len(wyckoff)):
@@ -379,7 +381,7 @@ def modify_frac_coords_one(frac_coords, site_symm, atom_types, spacegroup):
     new_frac_coords = np.stack(new_frac_coords)
     new_atom_types = np.stack(new_atom_types)
     new_site_symm = np.stack(new_site_symm)
-    return new_frac_coords, len(new_frac_coords), new_atom_types, new_site_symm
+    return new_frac_coords, len(new_frac_coords), new_atom_types, new_site_symm, min_ss_dists, wp_projection_dists
 
 
 def modify_frac_coords(traj:Dict, spacegroups:List[int], num_repr:List[int]) -> Dict:
@@ -389,12 +391,13 @@ def modify_frac_coords(traj:Dict, spacegroups:List[int], num_repr:List[int]) -> 
     updated_num_atoms = []
     updated_atom_types = []
     updated_site_symm = []
+    min_ss_dists, wp_projection_dists = [], []
     
     for index in range(len(num_repr)):
         if num_repr[index] > 0:
             # if something is predicted, otherwise it is an empty crystal which we are post-processing
             # this might happen if we predict a crystal with only dummy representative atoms
-            new_frac_coords, new_num_atoms, new_atom_types, new_site_sym = modify_frac_coords_one(
+            new_frac_coords, new_num_atoms, new_atom_types, new_site_sym,  min_ss_dist, wp_projection_dist = modify_frac_coords_one(
                     traj['frac_coords'][total_atoms:total_atoms+num_repr[index]], # num_repr x 3
                     traj['site_symm'][total_atoms:total_atoms+num_repr[index]], # num_repr x 195
                     traj['atom_types'][total_atoms:total_atoms+num_repr[index]], # num_repr x 100
@@ -406,6 +409,8 @@ def modify_frac_coords(traj:Dict, spacegroups:List[int], num_repr:List[int]) -> 
                 updated_num_atoms.append(new_num_atoms)
                 updated_atom_types.append(new_atom_types)
                 updated_site_symm.append(new_site_sym)
+                min_ss_dists.append(min_ss_dist)
+                wp_projection_dists.append(wp_projection_dist)
         
         total_atoms += num_repr[index]
     
@@ -413,6 +418,8 @@ def modify_frac_coords(traj:Dict, spacegroups:List[int], num_repr:List[int]) -> 
     traj['atom_types'] = torch.cat([torch.from_numpy(x) for x in updated_atom_types]).to(device)
     traj['num_atoms'] = torch.tensor(updated_num_atoms).to(device)
     traj['site_symm'] = torch.cat([torch.from_numpy(x) for x in updated_site_symm]).to(device)
+    traj['min_ss_dists'] = min_ss_dists
+    traj['wp_projection_dists'] = wp_projection_dists
 
     
     return traj
@@ -468,12 +475,13 @@ class CSPDiffusion(BaseModule):
         # NOTE: set pred_site_symm_type to True to generate site symmetries also (set it to False to behave as DiffCSP)
         # pred_type is set to True to generate atom types
         mask_token = 1 if self.hparams.prior == 'masked' else 0 
-        self.decoder = hydra.utils.instantiate(self.hparams.decoder, latent_dim = self.hparams.latent_dim + self.hparams.time_dim, pred_type = True, pred_site_symm_type = True, smooth = True, max_atoms=MAX_ATOMIC_NUM+mask_token, mask_token=mask_token)
+        self.decoder = hydra.utils.instantiate(self.hparams.decoder, time_dim=self.hparams.time_dim + self.hparams.latent_dim, latent_dim = self.hparams.latent_dim, pred_type = True, pred_site_symm_type = True, smooth = True, max_atoms=MAX_ATOMIC_NUM+mask_token, mask_token=mask_token)
         self.beta_scheduler = hydra.utils.instantiate(self.hparams.beta_scheduler).to(self.device)
         self.sigma_scheduler = hydra.utils.instantiate(self.hparams.sigma_scheduler).to(self.device)
         self.time_dim = self.hparams.time_dim
+        self.latent_dim = self.hparams.latent_dim
         self.time_embedding = SinusoidalTimeEmbeddings(self.time_dim)
-        self.spacegroup_embedding = build_mlp(in_dim=SG_CONDITION_DIM, hidden_dim=128, fc_num_layers=2, out_dim=self.time_dim)
+        self.spacegroup_embedding = build_mlp(in_dim=SG_CONDITION_DIM, hidden_dim=128, fc_num_layers=2, out_dim=self.latent_dim)
         self.keep_lattice = self.hparams.cost_lattice < 1e-5
         self.keep_coords = self.hparams.cost_coord < 1e-5
         self.use_ks = self.hparams.use_ks
@@ -494,7 +502,8 @@ class CSPDiffusion(BaseModule):
 
     def init_discrete_noise(self, prior='marginal'):
         if prior == 'marginal':
-            return DiscreteNoiseMarginal(self.hparams.data.root_path, self.beta_scheduler)
+            return DiscreteNoiseMarginal(self.hparams.data.datamodule.atom_marginals_path,
+                                         self.hparams.data.datamodule.ss_marginals_path, self.beta_scheduler)
         elif prior == 'masked':
             return DiscreteNoiseMasked(self.beta_scheduler)
 
@@ -510,7 +519,8 @@ class CSPDiffusion(BaseModule):
         #site_symms, node_mask = to_dense_batch(site_symm.flatten(-2, -1), batch.batch, fill_value=0)
         gt_spacegroup_onehot = F.one_hot(batch.spacegroup - 1, num_classes=N_SPACEGROUPS).float()
         times = self.beta_scheduler.uniform_sample_t(batch_size, self.device)
-        time_emb = torch.cat([self.time_embedding(times), self.spacegroup_embedding(batch.sg_condition.reshape(-1, SG_CONDITION_DIM))], dim=-1)
+        spacegroup_emb = self.spacegroup_embedding(batch.sg_condition.reshape(-1, SG_CONDITION_DIM))
+        time_emb = torch.cat([self.time_embedding(times), spacegroup_emb], dim=-1)
         alphas_cumprod = self.beta_scheduler.alphas_cumprod[times]
 
         c0 = torch.sqrt(alphas_cumprod)
@@ -638,7 +648,8 @@ class CSPDiffusion(BaseModule):
             # get diffusion timestep embeddings, concatenated with spacegroup condition    
             #gt_spacegroup_onehot = F.one_hot(batch.spacegroup - 1, num_classes=N_SPACEGROUPS).float()
             #time_emb = torch.cat([self.time_embedding(times), self.spacegroup_embedding(gt_spacegroup_onehot)], dim=-1)
-            time_emb = torch.cat([self.time_embedding(times), self.spacegroup_embedding(batch.sg_condition.reshape(-1, SG_CONDITION_DIM))], dim=-1)
+            spacegroup_emb = self.spacegroup_embedding(batch.sg_condition.reshape(-1, SG_CONDITION_DIM))
+            time_emb = torch.cat([self.time_embedding(times), spacegroup_emb], dim=-1)
 
             alphas = self.beta_scheduler.alphas[t]
             alphas_cumprod = self.beta_scheduler.alphas_cumprod[t]
@@ -840,10 +851,10 @@ class CSPDiffusion(BaseModule):
         test_set = SampleDataset(
                             eval_model_name_dataset[self.hparams.data.eval_model_name], 
                             self.hparams.data.eval_generate_samples, 
-                            self.hparams.data.datamodule.datasets.train.save_path)
+                            self.hparams.data.datamodule.datasets.train.save_path,
+                            self.hparams.data.datamodule.datasets.train.sg_info_path,)
         
         test_loader = DataLoader(test_set, batch_size = 50)
-        
         frac_coords = []
         num_atoms = []
         atom_types = []

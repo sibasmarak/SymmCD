@@ -90,6 +90,12 @@ def run(cfg: DictConfig) -> None:
         # Switch wandb mode to offline to prevent online logging
         cfg.logging.wandb.mode = "offline"
 
+    # Instantiate datamodule
+    hydra.utils.log.info(f"Instantiating <{cfg.data.datamodule._target_}>")
+    datamodule: pl.LightningDataModule = hydra.utils.instantiate(
+        cfg.data.datamodule, _recursive_=False
+    )
+
     # Instantiate model
     hydra.utils.log.info(f"Instantiating <{cfg.model._target_}>")
     model: pl.LightningModule = hydra.utils.instantiate(
@@ -118,11 +124,6 @@ def run(cfg: DictConfig) -> None:
             log_freq=cfg.logging.wandb_watch.log_freq,
         )
 
-    # Instantiate datamodule
-    hydra.utils.log.info(f"Instantiating <{cfg.data.datamodule._target_}>")
-    datamodule: pl.LightningDataModule = hydra.utils.instantiate(
-        cfg.data.datamodule, _recursive_=False
-    )
 
     
             
@@ -167,7 +168,7 @@ def run(cfg: DictConfig) -> None:
         callbacks=callbacks,
         deterministic=cfg.train.deterministic,
         check_val_every_n_epoch=cfg.logging.val_check_interval,
-        strategy=DDPStrategy(find_unused_parameters=True),
+        #strategy=DDPStrategy(find_unused_parameters=True),
         # progress_bar_refresh_rate=cfg.logging.progress_bar_refresh_rate, #NOTE: No longer viable in new PyTorch Lightning version
         # resume_from_checkpoint=ckpt,#NOTE: No longer viable in new PyTorch Lightning version
         **cfg.train.pl_trainer,

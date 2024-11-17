@@ -6,7 +6,7 @@ import warnings
 import numpy as np
 from pathlib import Path
 from tqdm import tqdm
-from p_tqdm import p_map, p_umap
+from p_tqdm import p_map
 from scipy.stats import wasserstein_distance
 import pandas as pd
 import torch
@@ -17,25 +17,35 @@ from pymatgen.core.lattice import Lattice
 from pymatgen.analysis.structure_matcher import StructureMatcher
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 from matminer.featurizers.site.fingerprint import CrystalNNFingerprint
+from matminer.featurizers.structure import SiteStatsFingerprint
 from matminer.featurizers.composition.composite import ElementProperty
 
 import sys
 sys.path.append('.')
+sys.path.append('..')
+import os
+myDir = os.getcwd()
+sys.path.append(myDir)
 
 from diffcsp.common.data_utils import build_crystal, get_symmetry_info
 from pyxtal import pyxtal
 
 import pickle
 
-import sys
-sys.path.append('.')
 warnings.simplefilter("ignore")
 from scripts.eval_utils import (
     smact_validity, structure_validity, CompScaler, get_fp_pdist,
     load_config, load_data, get_crystals_list, prop_model_eval, compute_cov)
 
-Crystal_Tol = 0.01
+Crystal_Tol = 0.1
 CrystalNNFP = CrystalNNFingerprint.from_preset("ops")
+CrystalNNFP_full = SiteStatsFingerprint(
+    CrystalNNFingerprint.from_preset('ops'),
+    stats=('mean', 'maximum', 'minimum', 'std_dev'))
+CrystalNNFP_plus = SiteStatsFingerprint(
+    CrystalNNFingerprint.from_preset('ops'),
+    stats=('mean', 'maximum'))
+
 CompFP = ElementProperty.from_preset('magpie')
 
 Percentiles = {
@@ -70,11 +80,12 @@ def club_consecutive_elements(arr):
 
 class Crystal(object):
 
-    def __init__(self, crys_array_dict, filter=False):
+    def __init__(self, crys_array_dict, filter=False, full_fingerprint=False):
         self.frac_coords = crys_array_dict['frac_coords']
         self.atom_types = crys_array_dict['atom_types']
         self.lengths = crys_array_dict['lengths']
         self.angles = crys_array_dict['angles']
+        self.full_fingerprint = full_fingerprint
         if 'spacegroups' in crys_array_dict:
             self.spacegroup = crys_array_dict['spacegroups']
         else:
@@ -94,7 +105,7 @@ class Crystal(object):
             # for perov that would mean a numpy array of (5, 100) instead of (5,)
             self.dict['atom_types'] = (np.argmax(self.atom_types, axis=-1) + 1)
             self.atom_types = (np.argmax(self.atom_types, axis=-1) + 1)
-            
+        
         # NOTE: post-processing hack to see what will happen if we remove the atoms that are too close (and have the same types)
         # find the distance matrix between atoms of same type -> if less than cutoff merge them
         if filter:
@@ -140,6 +151,9 @@ class Crystal(object):
 
 
     def get_structure(self):
+        if (1 > self.atom_types).any() or (self.atom_types > 94).any():
+            self.constructed = False
+            self.invalid_reason = f"{self.atom_types=} are not with range"
         if len(self.frac_coords) > 30:
             self.constructed = False
             self.invalid_reason = 'too_many_atoms'
@@ -174,12 +188,13 @@ class Crystal(object):
                         *(self.lengths.tolist() + self.angles.tolist())),
                     species=self.atom_types, coords=self.frac_coords, coords_are_cartesian=False)
                 self.constructed = True
+                if self.structure.volume < 0.1:
+                    self.constructed = False
+                    self.invalid_reason = 'unrealistically_small_lattice'
+
             except Exception:
                 self.constructed = False
                 self.invalid_reason = 'construction_raises_exception'
-            if self.structure.volume < 0.1:
-                self.constructed = False
-                self.invalid_reason = 'unrealistically_small_lattice'
 
     def get_composition(self):
         elem_counter = Counter(self.atom_types)
@@ -196,33 +211,48 @@ class Crystal(object):
         self.comps = tuple(counts.astype('int').tolist())
 
     def get_validity(self):
-        if len(self.elems) == 0:
-            self.comp_valid = False
-        else:
-            self.comp_valid = smact_validity(self.elems, self.comps)
         if self.constructed:
+            if len(self.elems) == 0:
+                self.comp_valid = False
+            else:
+                self.comp_valid = smact_validity(self.elems, self.comps)
             self.struct_valid = structure_validity(self.structure)
         else:
+            self.comp_valid = False
             self.struct_valid = False
         self.valid = self.comp_valid and self.struct_valid
 
     def get_fingerprints(self):
         if len(self.atom_types) == 0:
             self.struct_fp = None
+            self.comp_fp = None
             return
+        if not self.constructed:
+            self.struct_fp = None
+            self.comp_fp = None
+            return 
         elem_counter = Counter(self.atom_types)
         comp = Composition(elem_counter)
         self.comp_fp = CompFP.featurize(comp)
-        try:
-            site_fps = [CrystalNNFP.featurize(
-                self.structure, i) for i in range(len(self.structure))]
-        except Exception:
-            # counts crystal as invalid if fingerprint cannot be constructed.
-            self.valid = False
-            self.comp_fp = None
-            self.struct_fp = None
-            return
-        self.struct_fp = np.array(site_fps).mean(axis=0)
+        if self.full_fingerprint:
+            try:
+                struct_fp = CrystalNNFP_full.featurize(self.structure)
+                self.struct_fp = np.array(struct_fp)
+            except Exception:
+                self.valid = False
+                self.comp_fp = None
+                self.struct_fp = None
+        else:
+            try:
+                site_fps = [CrystalNNFP.featurize(
+                    self.structure, i) for i in range(len(self.structure))]
+            except Exception:
+                # counts crystal as invalid if fingerprint cannot be constructed.
+                self.valid = False
+                self.comp_fp = None
+                self.struct_fp = None
+                return
+            self.struct_fp = np.array(site_fps).mean(axis=0)
 
     def get_symmetry(self):
         if self.constructed:
@@ -411,6 +441,7 @@ class GenEval(object):
         metrics.update(self.get_density_wdist())
         metrics.update(self.get_prop_wdist())
         metrics.update(self.get_num_elem_wdist())
+        print(metrics)
         metrics.update(self.get_coverage())
         metrics.update(self.get_spacegroup_wdist())
         metrics.update(self.get_spacegroup_match())
@@ -512,7 +543,17 @@ def main(args):
 
         gen_file_path = get_file_paths(args.root_path, 'gen', args.label)
         crys_array_list, _ = get_crystal_array_list(gen_file_path, batch_idx = -2)
-        if args.gt_file != '':
+        if args.gt_crys_file != '':
+            if os.path.exists(args.gt_crys_file):
+                print("loading gt_crys")
+                gt_crys = torch.load(args.gt_crys_file)    
+            else:
+                print("Reading gt_crys csv")
+                csv = pd.read_csv(args.gt_file)
+                gt_crys = p_map(get_gt_crys_ori_conventional, csv['cif'])
+                torch.save(gt_crys, args.gt_crys_file)
+        elif args.gt_file != '':
+            print("Reading gt_crys csv")
             csv = pd.read_csv(args.gt_file)
             if args.conventional:
                 gt_crys = p_map(get_gt_crys_ori_conventional, csv['cif'])
@@ -525,12 +566,15 @@ def main(args):
             _, true_crystal_array_list = get_crystal_array_list(
                 recon_file_path)
             gt_crys = p_map(lambda x: Crystal(x), true_crystal_array_list)
-
-        gen_crys = p_umap(lambda x: Crystal(x), crys_array_list)
+        if os.path.exists(args.root_path + f'/gen_crys_{args.label}.pt'):
+            gen_crys = torch.load(args.root_path + f'/gen_crys_{args.label}.pt')
+        else:
+            gen_crys = p_map(lambda x: Crystal(x), crys_array_list)
+            torch.save(gen_crys, args.root_path + f'/gen_crys_{args.label}.pt')
 
         gen_evaluator = GenEval(
             gen_crys, gt_crys, eval_model_name=eval_model_name, n_samples=args.n_samples,
-            gt_prop_eval_path=cfg.data.datamodule.datasets.val[0].gt_prop_eval_path)
+            gt_prop_eval_path=cfg.data.datamodule.datasets.test[0].gt_prop_eval_path)
         gen_metrics = gen_evaluator.get_metrics()
         all_metrics.update(gen_metrics)
 
@@ -600,6 +644,7 @@ if __name__ == '__main__':
     parser.add_argument('--label', default='')
     parser.add_argument('--tasks', nargs='+', default=['csp', 'gen'])
     parser.add_argument('--gt_file',default='')
+    parser.add_argument('--gt_crys_file',default='')
     parser.add_argument('--multi_eval',action='store_true')
     parser.add_argument('--n_samples', type=int, default=1000)
     parser.add_argument('--conventional', type=bool, default=False,

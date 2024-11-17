@@ -116,8 +116,11 @@ B_MATRICES[3, 1, 1] = -1
 B_MATRICES[4, 0, 0] = B_MATRICES[4, 1, 1] = 1
 B_MATRICES[4, 2, 2] = -2
 B_MATRICES[5, 0, 0] =  B_MATRICES[5, 1, 1]  = B_MATRICES[5, 2, 2]  = 1
-
+MAX_ATOMIC_NUM=94
 N_SPACEGROUPS = 230
+N_AXES = 15
+N_SS = 13
+
 dirname = os.path.dirname(__file__)
 
 def lattice_from_ks(ks):
@@ -202,15 +205,13 @@ def refine_spacegroup(crystal, tol=0.01):
 def get_all_wyckoff_labels():
     # collect all wyckoff positions available
     wyckoff_labels = []
-    for spacegroup in range(1, 231):
+    for spacegroup in range(1, N_SPACEGROUPS + 1):
         group = Group(spacegroup)
         for wp in group.Wyckoff_positions:
             wp_label = wp.get_label()
             if wp_label not in wyckoff_labels: wyckoff_labels.append(wp_label)
     return sorted(wyckoff_labels)
 
-N_AXES = 15
-N_SS = 13
 
 def get_spacegroup_binary_repr(number:int):
     spg = Group(number)
@@ -1421,6 +1422,31 @@ def preprocess_tensors(crystal_array_list, niggli, primitive, graph_method):
         sorted(unordered_results, key=lambda x: x['batch_idx']))
     return ordered_results
 
+def save_site_symm_and_atom_type_marginals(atom_marginals_path, ss_marginals_path, dataset):
+    # Compute the site symmetry marginals
+    all_num_reps = torch.Tensor([dataset[i].number_representatives for i in range(len(dataset))])
+    all_sgs = torch.Tensor([dataset[i].spacegroup for i in range(len(dataset))])
+    all_site_symms = torch.cat([dataset[i].site_symm for i in range(len(dataset))])
+    all_sgs_repeated = torch.repeat_interleave(all_sgs, all_num_reps.int()).int()
+    site_symm_sums_per_sg = torch.zeros((N_SPACEGROUPS + 1, N_AXES, N_SS))
+    for i in tqdm(range(len(all_sgs_repeated))):
+        site_symm_sums_per_sg[all_sgs_repeated[i]] += all_site_symms[i]
+    site_symm_sums_per_axis = [site_symm_sums_per_sg[:, i, :] for i in range(N_AXES)]
+    for i in range(N_AXES):
+        for j in range(N_SPACEGROUPS + 1):
+            if site_symm_sums_per_axis[i][j].sum() > 0:
+                site_symm_sums_per_axis[i][j] = site_symm_sums_per_axis[i][j] / site_symm_sums_per_axis[i][j].sum()
+            else:
+                site_symm_sums_per_axis[i][j] = torch.ones(N_SS) / N_SS
+    torch.save(site_symm_sums_per_axis, ss_marginals_path)
+
+    # Compute the atom type marginals
+    atom_type_marginals = torch.zeros(MAX_ATOMIC_NUM)
+    for i in range(len(dataset)):
+        for atom_type in dataset[i].atom_types:
+            atom_type_marginals[atom_type - 1] += 1
+    atom_type_marginals = atom_type_marginals / atom_type_marginals.sum()
+    torch.save(atom_type_marginals, atom_marginals_path)
 
 def add_scaled_lattice_prop(data_list, lattice_scale_method):
     for dict in data_list:
