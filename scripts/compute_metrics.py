@@ -27,7 +27,7 @@ import os
 myDir = os.getcwd()
 sys.path.append(myDir)
 
-from diffcsp.common.data_utils import build_crystal, get_symmetry_info
+from symmcd.common.data_utils import build_crystal, get_symmetry_info
 from pyxtal import pyxtal
 
 import pickle

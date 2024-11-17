@@ -1,4 +1,4 @@
-_target_: diffcsp.pl_modules.diff_utils.AdaptiveCosineSchedulers
+_target_: symmcd.pl_modules.diff_utils.AdaptiveCosineSchedulers
 timesteps: ${model.timesteps}
 nu_lattice: 1
 nu_atom: 1

@@ -1,6 +1,6 @@
-_target_: diffcsp.pl_modules.model.CrystGNN_Supervise
+_target_: symmcd.pl_modules.model.CrystGNN_Supervise
 encoder: 
-  _target_: diffcsp.pl_modules.gnn.DimeNetPlusPlusWrap
+  _target_: symmcd.pl_modules.gnn.DimeNetPlusPlusWrap
   num_targets: 1
   hidden_channels: 128
   num_blocks: 4

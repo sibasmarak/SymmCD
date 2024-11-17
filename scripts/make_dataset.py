@@ -18,7 +18,7 @@ tolerance = 0.01
 use_space_group = True
 use_pos_index = False
 
-from diffcsp.pl_data.dataset import CrystDataset
+from symmcd.pl_data.dataset import CrystDataset
 path = './data/mp_20/train.csv'
 save_path ='./data/mp_20/train_ori.pt'
 dataset = CrystDataset(name="Formation energy test",

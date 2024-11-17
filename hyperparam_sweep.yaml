@@ -1,4 +1,4 @@
-program: diffcsp.run
+program: symmcd.run
 method: random
 name: mp20 ab-initio hyperparam sweep
 parameters:
@@ -13,7 +13,7 @@ parameters:
     logging.wandb.mode:
       value: online
     logging.wandb.project:
-      value: diffcsp_symmetry
+      value: symmcd
     logging.val_check_interval:
       value: 1
     train.pl_trainer.devices:

@@ -27,11 +27,11 @@ eval_every_epoch: 500
 eval_generate_samples: 100
 
 datamodule:
-  _target_: diffcsp.pl_data.datamodule.CrystDataModule
+  _target_: symmcd.pl_data.datamodule.CrystDataModule
 
   datasets:
     train:
-      _target_: diffcsp.pl_data.dataset.CrystDataset
+      _target_: symmcd.pl_data.dataset.CrystDataset
       name: Formation energy train
       path: ${data.root_path}/train.csv
       save_path: ${data.root_path}/train_ori.pt
@@ -49,7 +49,7 @@ datamodule:
       gt_prop_eval_path:  ${data.root_path}/train_${data.eval_model_name}_${data.prop}.pt
 
     val:
-      - _target_: diffcsp.pl_data.dataset.CrystDataset
+      - _target_: symmcd.pl_data.dataset.CrystDataset
         name: Formation energy val
         path: ${data.root_path}/val.csv
         gt_crys_path: ${data.root_path}/val_gt_crys.pt
@@ -68,7 +68,7 @@ datamodule:
         gt_prop_eval_path:  ${data.root_path}/val_${data.eval_model_name}_${data.prop}.pt
 
     test:
-      - _target_: diffcsp.pl_data.dataset.CrystDataset
+      - _target_: symmcd.pl_data.dataset.CrystDataset
         name: Formation energy test
         path: ${data.root_path}/test.csv
         gt_crys_path: ${data.root_path}/test_gt_crys.pt

@@ -1,4 +1,4 @@
-_target_: diffcsp.pl_modules.discrete_diffusion_w_site_symm.CSPDiffusion
+_target_: symmcd.pl_modules.discrete_diffusion_w_site_symm.CSPDiffusion
 time_dim: 256
 latent_dim: 0
 cost_coord: 1.

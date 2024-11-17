@@ -1,4 +1,4 @@
-_target_: diffcsp.pl_modules.cspnet.CSPNet
+_target_: symmcd.pl_modules.cspnet.CSPNet
 network:  gnn # transformer
 hidden_dim: 512
 latent_dim: ${model.latent_dim}

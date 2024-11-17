@@ -21,10 +21,10 @@ from smact.screening import pauling_test
 import sys
 sys.path.append('.')
 
-from diffcsp.common.constants import CompScalerMeans, CompScalerStds
-from diffcsp.common.data_utils import StandardScaler, chemical_symbols
-from diffcsp.pl_data.dataset import TensorCrystDataset
-from diffcsp.pl_data.datamodule import worker_init_fn
+from symmcd.common.constants import CompScalerMeans, CompScalerStds
+from symmcd.common.data_utils import StandardScaler, chemical_symbols
+from symmcd.pl_data.dataset import TensorCrystDataset
+from symmcd.pl_data.datamodule import worker_init_fn
 
 from torch_geometric.data import DataLoader
 
@@ -96,9 +96,9 @@ def load_data(file_path):
 
 
 def get_model_path(eval_model_name):
-    import diffcsp
+    import symmcd
     model_path = (
-        Path(diffcsp.__file__).parent / 'prop_models' / eval_model_name)
+        Path(symmcd.__file__).parent / 'prop_models' / eval_model_name)
     return model_path
 
 
@@ -126,18 +126,16 @@ def load_model(model_path, load_data=False, testing=True):
                 [int(ckpt.parts[-1].split('-')[0].split('=')[1]) for ckpt in ckpts if 'last' not in ckpt.parts[-1]])
             ckpt = str(ckpts[ckpt_epochs.argsort()[-1]])
         # model = model.load_from_checkpoint(ckpt, strict=False) # old PyTorch lightning, no longer supported
-        if cfg.model._target_ == "diffcsp.pl_modules.diffusion.CSPDiffusion":
-            from diffcsp.pl_modules.diffusion import CSPDiffusion as Model
-        elif cfg.model._target_ == "diffcsp.pl_modules.diffusion_w_type.CSPDiffusion":
-            from diffcsp.pl_modules.diffusion_w_type import CSPDiffusion as Model
-        elif cfg.model._target_ == "diffcsp.pl_modules.diffusion_w_site_symm.CSPDiffusion":
-            from diffcsp.pl_modules.diffusion_w_site_symm import CSPDiffusion as Model
-        elif cfg.model._target_ == "diffcsp.pl_modules.diffusion_csp_w_site_symm.CSPDiffusion":
-            from diffcsp.pl_modules.diffusion_csp_w_site_symm import CSPDiffusion as Model
-        elif cfg.model._target_ == "diffcsp.pl_modules.discrete_diffusion_w_site_symm.CSPDiffusion":
-            from diffcsp.pl_modules.discrete_diffusion_w_site_symm import CSPDiffusion as Model
-        elif cfg.model._target_ == "diffcsp.pl_modules.model.CrystGNN_Supervise":
-            from diffcsp.pl_modules.model import CrystGNN_Supervise as Model
+        if cfg.model._target_ == "symmcd.pl_modules.diffusion.CSPDiffusion":
+            from symmcd.pl_modules.diffusion import CSPDiffusion as Model
+        elif cfg.model._target_ == "symmcd.pl_modules.diffusion_w_type.CSPDiffusion":
+            from symmcd.pl_modules.diffusion_w_type import CSPDiffusion as Model
+        elif cfg.model._target_ == "symmcd.pl_modules.diffusion_w_site_symm.CSPDiffusion":
+            from symmcd.pl_modules.diffusion_w_site_symm import CSPDiffusion as Model
+        elif cfg.model._target_ == "symmcd.pl_modules.discrete_diffusion_w_site_symm.CSPDiffusion":
+            from symmcd.pl_modules.discrete_diffusion_w_site_symm import CSPDiffusion as Model
+        elif cfg.model._target_ == "symmcd.pl_modules.model.CrystGNN_Supervise":
+            from symmcd.pl_modules.model import CrystGNN_Supervise as Model
         else:
             raise NotImplementedError
         model = Model.load_from_checkpoint(ckpt, strict=False)
