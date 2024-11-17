@@ -186,7 +186,7 @@ def build_crystal(crystal_str, niggli=True, primitive=False):
         coords=crystal.frac_coords,
         coords_are_cartesian=False,
     )
-    # match is gaurantteed because cif only uses lattice params & frac_coords
+    # match is gauranteed because cif only uses lattice params & frac_coords
     # assert canonical_crystal.matches(crystal)
     return canonical_crystal
 
@@ -242,8 +242,6 @@ def get_wyckoff_symbol_from_binary_repr(binary_repr:torch.tensor, spacegroup_num
 
 def get_symmetry_info(crystal, tol=0.01, num_repr=0, use_random_repr=False):
     spga = SpacegroupAnalyzer(crystal, symprec=tol)
-    # NOTE: this converts [x,0,0.5] -> [0, 0.5, x] (or the canonical form)
-    # basically diffusion model learns the distribution of this refined structure and not the original structure
     crystal = spga.get_refined_structure() 
     pyx = pyxtal()
     try:
@@ -264,12 +262,6 @@ def get_symmetry_info(crystal, tol=0.01, num_repr=0, use_random_repr=False):
         anchor = len(matrices)
         coord = site.position
 
-        # coords.append(coord)
-        # species.append(specie)
-        # matrices.append(site.wp[0].affine_matrix)
-        # anchors.append(anchor)
-
-        # old code from DiffCSP (generate all atoms in the orbit)
         for syms in site.wp:
             species.append(specie)
             matrices.append(syms.affine_matrix)
@@ -1373,12 +1365,6 @@ def preprocess(input_file, num_workers, niggli, primitive, graph_method,
         [num_repr] * len(df),
         [use_random_repr] * len(df),
         num_cpus=num_workers)
-
-    # unordered_results = []
-    # for r, n, p, gm, pl, usg, t, nr, urr in zip([df.iloc[idx] for idx in range(len(df))], [niggli] * len(df), [primitive] * len(df), [graph_method] * len(df), [prop_list] * len(df), 
-    #                                    [use_space_group] * len(df), [tol] * len(df) , [num_repr] * len(df), [use_random_repr] * len(df)):
-    #     result_dict = process_one(r, n, p, gm, pl, usg, t, nr, urr)
-    #     unordered_results.append(result_dict)
 
     mpid_to_results = {result['mp_id']: result for result in unordered_results}
     ordered_results = [mpid_to_results[df.iloc[idx]['material_id']]
