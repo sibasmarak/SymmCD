@@ -105,12 +105,6 @@ class CrystDataset(Dataset):
             mask = mask.astype(bool)
             frac_coords = frac_coords[mask]
             
-            # the correct way to filter the edge_indices
-            # however this leads to empty edge_indices
-            # edge_indices_mask = np.isin(edge_indices[:, 0], np.where(mask)[0]) & np.isin(edge_indices[:, 1], np.where(mask)[0])
-            # edge_indices = edge_indices[edge_indices_mask]
-            # to_jimages = to_jimages[edge_indices_mask]
-            
             edge_indices = np.array(np.meshgrid(np.where(mask)[0], np.where(mask)[0])).T.reshape(-1, 2)
             edge_indices = edge_indices[edge_indices[:, 0] != edge_indices[:, 1]]
 

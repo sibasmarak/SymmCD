@@ -188,7 +188,6 @@ class DiscreteNoise(nn.Module):
             Qsb: bs, d0, d_t-1
             Qtb: bs, d0, dt.
         """
-        # TODO
         Qt_T = Qt.transpose(-1, -2)                 # bs, dt, d_t-1
         left_term = z_t @ Qt_T                      # bs, N, d_t-1
         left_term = left_term.unsqueeze(dim=2)      # bs, N, 1, d_t-1
@@ -618,7 +617,6 @@ class CSPDiffusion(BaseModule):
         l_T = lattice_ks_to_matrix_torch(k_T)
         x_T = torch.rand([batch.num_nodes, 3]).to(self.device)
 
-        # TODO: there must be an easier way to do this
         _, node_mask = to_dense_batch(batch.batch, batch.batch, fill_value=0)
         t_T, symm_T = self.discrete_noise.sample_limit_dist(node_mask, batch.spacegroup)
         t_T = t_T[node_mask]

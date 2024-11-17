@@ -446,7 +446,6 @@ class DimeNetPlusPlusWrap(DimeNetPlusPlus):
             else:
                 raise NotImplementedError
         else:
-            # TODO: if want to use cat, need two lines here
             energy = scatter(P, batch, dim=0, reduce=self.readout)
 
         return energy

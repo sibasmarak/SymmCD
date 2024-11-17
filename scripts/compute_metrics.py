@@ -80,7 +80,7 @@ def club_consecutive_elements(arr):
 
 class Crystal(object):
 
-    def __init__(self, crys_array_dict, filter=False, full_fingerprint=False):
+    def __init__(self, crys_array_dict, full_fingerprint=False):
         self.frac_coords = crys_array_dict['frac_coords']
         self.atom_types = crys_array_dict['atom_types']
         self.lengths = crys_array_dict['lengths']
@@ -102,47 +102,9 @@ class Crystal(object):
         self.dict = crys_array_dict
         if len(self.atom_types.shape) > 1:
             # this implies the distribution over atom_types is passed instead of the atom_types
-            # for perov that would mean a numpy array of (5, 100) instead of (5,)
             self.dict['atom_types'] = (np.argmax(self.atom_types, axis=-1) + 1)
             self.atom_types = (np.argmax(self.atom_types, axis=-1) + 1)
-        
-        # NOTE: post-processing hack to see what will happen if we remove the atoms that are too close (and have the same types)
-        # find the distance matrix between atoms of same type -> if less than cutoff merge them
-        if filter:
-            self.distance_cutoff = 0.5 # set to 0.5 because structural validity cutoff is 0.5
-            updated_frac_coords, updated_atom_types = [], []
-            
-            for atm_type, atm_index, counts in club_consecutive_elements(self.atom_types):
-                atm_type_frac_coords = self.frac_coords[atm_index:atm_index+counts] # all frac coords for this atom type
-                upd_frac_coords, upd_atom_types = [], [] # updated frac coords and atom types for this atom type
-                
-                for frac in atm_type_frac_coords:
-                    add_flag = True
 
-                    if len(upd_frac_coords) > 0:
-                        distances = np.linalg.norm(
-                                    np.minimum(
-                                        (frac - np.array(upd_frac_coords))%1. * self.lengths, 
-                                        (np.array(upd_frac_coords) - frac)%1. * self.lengths
-                                        ), axis=-1)
-                        
-                        if np.min(distances) <= self.distance_cutoff:
-                            add_flag = False
-                            break
-
-                    if add_flag:
-                        upd_frac_coords.append(frac)
-                        upd_atom_types.append(atm_type)
-                        
-                updated_frac_coords.extend(upd_frac_coords)
-                updated_atom_types.extend(upd_atom_types)
-                    
-            self.frac_coords = np.array(updated_frac_coords)
-            self.atom_types = np.array(updated_atom_types)
-            self.dict['atom_types'] = self.atom_types
-            self.dict['frac_coords'] = self.frac_coords
-            self.dict['num_atoms'] = len(self.atom_types)
-        
         self.get_structure()
         self.get_composition()
         self.get_validity()
@@ -441,7 +403,6 @@ class GenEval(object):
         metrics.update(self.get_density_wdist())
         metrics.update(self.get_prop_wdist())
         metrics.update(self.get_num_elem_wdist())
-        print(metrics)
         metrics.update(self.get_coverage())
         metrics.update(self.get_spacegroup_wdist())
         metrics.update(self.get_spacegroup_match())
@@ -545,7 +506,7 @@ def main(args):
         crys_array_list, _ = get_crystal_array_list(gen_file_path, batch_idx = -2)
         if args.gt_crys_file != '':
             if os.path.exists(args.gt_crys_file):
-                print("loading gt_crys")
+                print("Loading gt_crys")
                 gt_crys = torch.load(args.gt_crys_file)    
             else:
                 print("Reading gt_crys csv")

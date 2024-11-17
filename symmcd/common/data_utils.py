@@ -337,8 +337,7 @@ def build_crystal_graph(crystal, graph_method='crystalnn'):
                 crystal_graph = StructureGraph.with_local_env_strategy(
                     crystal, CrystalNN)
             except:
-                # TODO: make it 10 for perov and 20 for mp20
-                crystalNN_tmp = local_env.CrystalNN(distance_cutoffs=None, x_diff_weight=-1, porous_adjustment=False, search_cutoff=20)
+                crystalNN_tmp = local_env.CrystalNN(distance_cutoffs=None, x_diff_weight=-1, porous_adjustment=False, search_cutoff=20) # 10 for perov
                 crystal_graph = StructureGraph.with_local_env_strategy(
                     crystal, crystalNN_tmp) 
     elif graph_method == 'none':
@@ -863,8 +862,6 @@ def radius_graph_pbc(pos, lengths, angles, natoms, radius, max_num_neighbors_thr
     radius_real = (min_dist.min(dim=-1)[0] + 0.01)#.clamp(max=radius)
     
     radius_real = torch.repeat_interleave(radius_real, num_atoms_per_image_sqr * num_cells)
-
-    # print(min_dist.min(dim=-1)[0])
     
     # radius_real = radius
     

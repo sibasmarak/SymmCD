@@ -24,7 +24,7 @@ SymmCD (should now look like this, and the environment should contain cdvae and 
 ├── cdvae
 ├── conf
 ├── data 
-├── diffcsp
+├── symmcd
 ├── matminer
 ├── scripts
 ├── .env

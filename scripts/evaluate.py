@@ -31,8 +31,7 @@ def diffusion(loader, model, num_evals, step_lr = 1e-5):
 
         if torch.cuda.is_available():
             batch.cuda()
-        batch_all_frac_coords = []
-        batch_all_lattices = []
+
         batch_frac_coords, batch_num_atoms, batch_atom_types = [], [], []
         batch_lattices = []
         for eval_idx in range(num_evals):
@@ -46,16 +45,11 @@ def diffusion(loader, model, num_evals, step_lr = 1e-5):
             batch_lattices.append(outputs['lattices'].detach().cpu())
 
         try:
-            # normal case (or for 1 eval) when frac coord size is same across all idx
-            # not true when you are generating the representatives, 
-            # since there might be cases when you generate more or less atoms for the same structure
             frac_coords.append(torch.stack(batch_frac_coords, dim=0))
             num_atoms.append(torch.stack(batch_num_atoms, dim=0))
             atom_types.append(torch.stack(batch_atom_types, dim=0))
             lattices.append(torch.stack(batch_lattices, dim=0))
         except:
-            # TODO: discuss and fix how to handle this case of multi eval when the generated outputs have different sizes
-            # this is happening because we don't fix the number of atoms and it depends on the site symmetry
             raise NotImplementedError
 
         input_data_list = input_data_list + batch.to_data_list()
