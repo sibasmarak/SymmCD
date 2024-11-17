@@ -1,4 +1,4 @@
-name: diffcsp39
+name: symmcd
 channels:
   - pyg
   - pytorch
@@ -178,5 +178,4 @@ dependencies:
     - urllib3==2.2.1
     - wandb==0.16.6
     - zipp==3.18.1
-prefix: /home/mila/s/siba-smarak.panigrahi/.conda/envs/diffcsp39
 

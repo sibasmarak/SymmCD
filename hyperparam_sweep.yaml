@@ -1,6 +1,6 @@
 program: diffcsp.run
 method: random
-name: test different hyperparams (mp20 ab-intio, actual, randomly selected repr only)
+name: mp20 ab-initio hyperparam sweep
 parameters:
     expname:
       value: mp_20
