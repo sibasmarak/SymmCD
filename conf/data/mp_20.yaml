@@ -15,7 +15,7 @@ eval_model_name: mp20
 tolerance: 0.1
 
 use_space_group: true
-use_asym_unit: false
+use_asym_unit: true
 use_pos_index: false
 number_representatives: 0 # if set to 0, no dummy representatives are added
 use_random_representatives: false # irrelevant

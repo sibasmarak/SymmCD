@@ -24,7 +24,7 @@ class CrystDataset(Dataset):
                  graph_method: ValueNode, preprocess_workers: ValueNode,
                  lattice_scale_method: ValueNode, save_path: ValueNode, tolerance: ValueNode, 
                  use_space_group: ValueNode, use_pos_index: ValueNode, number_representatives: ValueNode=0, 
-                 use_random_representatives:ValueNode=False, use_asym_unit:ValueNode=False, lim=0, **kwargs):
+                 use_random_representatives:ValueNode=False, use_asym_unit:ValueNode=True, lim=0, **kwargs):
         super().__init__()
         self.path = path
         self.name = name

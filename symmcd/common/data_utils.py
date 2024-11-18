@@ -186,7 +186,7 @@ def build_crystal(crystal_str, niggli=True, primitive=False):
         coords=crystal.frac_coords,
         coords_are_cartesian=False,
     )
-    # match is gauranteed because cif only uses lattice params & frac_coords
+    # match is guaranteed because cif only uses lattice params & frac_coords
     # assert canonical_crystal.matches(crystal)
     return canonical_crystal
 
