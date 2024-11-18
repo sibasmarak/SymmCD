@@ -89,19 +89,21 @@ class CrystDataset(Dataset):
         if self.use_asym_unit and np.unique(data_dict["identifier"]).size > 1:
             # masking on the basis of identifiers of orbits in a crystal
             identifiers = data_dict['identifier']
+            if 'mask' not in data_dict:
+                # masking to create asymmetric unit (with one representative from each orbit)
+                mask = np.zeros_like(identifiers)
 
-            # masking to create asymmetric unit (with one representative from each orbit)
-            mask = np.zeros_like(identifiers)
+                # Process each unique identifier
+                for identifier in np.unique(identifiers):
+                    # Find indices where this identifier occurs
+                    indices = np.where(identifiers == identifier)[0]
+                    # Get index closest to random point in center
+                    min_index = ((frac_coords - POINT)**2).sum(1)[indices].argmin().item()
+                    mask[indices[min_index]] = 1
+                    self.cached_data[index]['mask'] = mask
+            else:
+                mask = data_dict['mask']
 
-            # Process each unique identifier
-            for identifier in np.unique(identifiers):
-                # Find indices where this identifier occurs
-                indices = np.where(identifiers == identifier)[0]
-                # Get index closest to random point in center
-                min_index = ((frac_coords - POINT)**2).sum(1)[indices].argmin().item()
-                mask[indices[min_index]] = 1
-                self.cached_data[index]['mask'] = mask
-            
             mask = mask.astype(bool)
             frac_coords = frac_coords[mask]
             
