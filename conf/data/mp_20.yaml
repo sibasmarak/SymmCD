@@ -20,7 +20,7 @@ use_pos_index: false
 number_representatives: 0 # if set to 0, no dummy representatives are added
 use_random_representatives: false # irrelevant
 
-train_max_epochs: 1000
+train_max_epochs: 2000
 early_stopping_patience: 100000
 teacher_forcing_max_epoch: 500
 
@@ -97,6 +97,6 @@ datamodule:
     test: 0
 
   batch_size:
-    train: 2048
-    val: 2048
-    test: 2048
+    train: 512
+    val: 512
+    test: 512

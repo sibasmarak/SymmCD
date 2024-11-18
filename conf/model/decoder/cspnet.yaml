@@ -1,10 +1,10 @@
 _target_: symmcd.pl_modules.cspnet.CSPNet
 network:  gnn # transformer
-hidden_dim: 512
+hidden_dim: 1024
 latent_dim: ${model.latent_dim}
 time_dim: ${model.time_dim}
 max_atoms: 94
-num_layers: 6
+num_layers: 8
 act_fn: silu
 dis_emb: sin
 num_freqs: 128
@@ -16,5 +16,5 @@ ip: ${model.ip}
 use_ks: ${model.use_ks}
 use_gt_frac_coords: ${model.use_gt_frac_coords}
 use_site_symm: ${model.use_site_symm}
-site_symm_matrix_embed: False
+site_symm_matrix_embed: true
 heads: 8

@@ -43,7 +43,7 @@ def swish(x):
 ### For the Ab Initio Generation task
 
 ```
-python symmcd/run.py data=<dataset> model=diffusion_w_type expname=<expname>
+python symmcd/run.py data=<dataset> model=discrete_diffusion_w_site_symm expname=<expname>
 ```
 
 - The ``<dataset>`` tag can be selected from `mp_20` and `mpts_52`.   
