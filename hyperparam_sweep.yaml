@@ -1,54 +1,83 @@
 program: symmcd.run
 method: random
-name: mp20 ab-initio hyperparam sweep
+name: Discrete diffusion MP20 test gnn
 parameters:
-    expname:
-      value: mp_20
-    data:
-      value: mp_20
-    data.number_representatives:
-      value: 20
-    data.train_max_epochs:
-      value: 2000
-    logging.wandb.mode:
-      value: online
-    logging.wandb.project:
-      value: symmcd
-    logging.val_check_interval:
-      value: 1
-    train.pl_trainer.devices:
-      value: 2
-    model:
-      value: diffusion_w_site_symm
-    model.cost_symm:
-      value: 20
-    model.use_ks:
-      value: True
-    model.ip:
-      value: False
-    model.beta_scheduler.nu_site_symm:
-      value: 1
-    model.beta_scheduler.nu_lattice:
-      value: 1
-    model.beta_scheduler.nu_atom:
-      value: 1
-    model.sigma_scheduler.sigma_end:
-      value: 0.5
-    model.use_gt_frac_coords:
-      value: True
-    model.decoder.num_freqs:
-      value: 128
-    model.decoder.num_layers:
-      values: [8, 10]
-    model.decoder.hidden_dim:
-      values: [512, 1024]
-    model.use_site_symm:
-      value: True
-    optim.lr:
-      values: [1e-3, 1e-4]
-command:
-    - ${env}
-    - python3
-    - -m
-    - ${program}
-    - ${args_no_hyphens}
+  data:
+    value: mp_20
+  data.datamodule.batch_size.test:
+    value: 512
+  data.datamodule.batch_size.train:
+    value: 512
+  data.datamodule.batch_size.val:
+    value: 512
+  data.eval_every_epoch:
+    value: 100
+  data.number_representatives:
+    value: 0
+  data.train_max_epochs:
+    value: 2000
+  expname:
+    value: mp_20
+  logging.val_check_interval:
+    value: 1
+  logging.wandb.mode:
+    value: online
+  logging.wandb.project:
+    value: symmcd
+  model:
+    value: discrete_diffusion_w_site_symm
+  model.cost_coord:
+    value: 1
+  model.cost_lattice:
+    value: 5
+  model.cost_symm:
+    value: 10
+  model.cost_type:
+    value: 0.1
+  model.decoder.hidden_dim:
+    values:
+      - 256
+      - 512
+      - 1024
+  model.decoder.ln:
+    values:
+      - true
+      - false
+  model.decoder.network:
+    value: gnn
+  model.decoder.num_freqs:
+    value: 128
+  model.decoder.num_layers:
+    values:
+      - 6
+      - 8
+      - 12
+      - 16
+  model.decoder.site_symm_matrix_embed:
+    values:
+      - true
+      - false
+  model.ip:
+    value: false
+  model.latent_dim:
+    values:
+      - 128
+      - 256
+      - 512
+  model.sigma_scheduler.sigma_end:
+    value: 0.5
+  model.time_dim:
+    values:
+      - 10
+      - 64
+      - 256
+  model.use_gt_frac_coords:
+    value: true
+  model.use_ks:
+    value: true
+  model.use_site_symm:
+    value: true
+  optim.optimizer.lr:
+    value: 0.001
+  train.pl_trainer.devices:
+    value: 1
