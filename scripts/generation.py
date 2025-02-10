@@ -120,8 +120,8 @@ class SampleDataset(Dataset):
         
         super().__init__()
         self.total_num = total_num
-        self.distribution = train_dist[dataset]
-        self.num_atoms = np.random.choice(len(self.distribution), total_num, p = self.distribution)
+        #self.distribution = train_dist[dataset]
+        #self.num_atoms = np.random.choice(len(self.distribution), total_num, p = self.distribution)
         self.is_carbon = dataset == 'carbon'
 
         self.sg_num_atoms, self.sg_dist, self.sg_number_binary_mapper = self.get_sg_statistics(train_ori_path, sg_info_path)

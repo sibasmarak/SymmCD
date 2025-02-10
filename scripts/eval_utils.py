@@ -333,6 +333,7 @@ def compute_cov(crys, gt_crys,
         num_gen_crystals = len(struc_fps)
 
     struc_fps, comp_fps = filter_fps(struc_fps, comp_fps)
+    gt_struc_fps, gt_comp_fps = filter_fps(gt_struc_fps, gt_comp_fps)
 
     comp_fps = CompScaler.transform(comp_fps)
     gt_comp_fps = CompScaler.transform(gt_comp_fps)

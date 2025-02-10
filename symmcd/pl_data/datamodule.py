@@ -61,9 +61,12 @@ class CrystDataModule(pl.LightningDataModule):
     def get_scaler_and_marginals(self, scaler_path, atom_marginals_path, ss_marginals_path):
         # Load once to compute property scaler
         are_marginals_available = os.path.exists(atom_marginals_path) and os.path.exists(ss_marginals_path)
-        if scaler_path is None or not are_marginals_available:
+        scaler_path = None
+        if scaler_path is not None:
+            are_scalers_available = os.path.exists(Path(scaler_path) / 'lattice_scaler.pt') and os.path.exists(Path(scaler_path) / 'prop_scaler.pt')
+        if scaler_path is None or not are_marginals_available or not are_scalers_available:
             train_dataset = hydra.utils.instantiate(self.datasets.train)
-        if scaler_path is None:
+        if scaler_path is None or not are_scalers_available:
             self.lattice_scaler = get_scaler_from_data_list(
                 train_dataset.cached_data,
                 key='scaled_lattice')

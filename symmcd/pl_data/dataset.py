@@ -107,6 +107,7 @@ class CrystDataset(Dataset):
             mask = mask.astype(bool)
             frac_coords = frac_coords[mask]
             
+            ''' TODO: see if this is needed
             edge_indices = np.array(np.meshgrid(np.where(mask)[0], np.where(mask)[0])).T.reshape(-1, 2)
             edge_indices = edge_indices[edge_indices[:, 0] != edge_indices[:, 1]]
 
@@ -117,7 +118,8 @@ class CrystDataset(Dataset):
             
             # define to_jimages for the new edge_indices
             to_jimages = np.zeros((edge_indices.shape[0], 3), dtype=int) # since entire asym_unit is contained inside the crystal
-            
+            '''
+
             atom_types = atom_types[mask]
             num_atoms = len(frac_coords)
             
