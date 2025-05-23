@@ -8,6 +8,7 @@ from pathlib import Path
 from tqdm import tqdm
 from p_tqdm import p_map
 from scipy.stats import wasserstein_distance
+from scipy.spatial.distance import jensenshannon
 import pandas as pd
 import torch
 
@@ -78,6 +79,31 @@ def club_consecutive_elements(arr):
 
     return output
 
+# Tools from FlowMM
+def bits2int(x, out_dtype):
+    """Converts bits x in (..., n) into an integer in (...)."""
+    if isinstance(x, torch.Tensor):
+        x = x.to(dtype=out_dtype)
+        n = x.size(-1)
+        x = torch.sum(x * (2 ** torch.arange(n)), dim=-1)
+        return x
+    else:
+        x = x.astype(out_dtype)
+        n = x.shape[-1]
+        x = np.sum(x * (2 ** np.arange(n)), axis=-1)
+        return x
+
+def analog_bits_to_int(analog_bits: torch.Tensor ) -> torch.LongTensor:
+    if isinstance(analog_bits, torch.Tensor):
+        signs = analog_bits.sign()
+        bits = (signs + 1) / 2
+        return bits2int(bits, torch.long)
+    else:
+        signs = np.sign(analog_bits)
+        bits = (signs + 1) / 2
+        return bits2int(bits, np.int64)
+
+
 class Crystal(object):
 
     def __init__(self, crys_array_dict, full_fingerprint=False):
@@ -101,10 +127,15 @@ class Crystal(object):
         
         self.dict = crys_array_dict
         if len(self.atom_types.shape) > 1:
-            # this implies the distribution over atom_types is passed instead of the atom_types
-            self.dict['atom_types'] = (np.argmax(self.atom_types, axis=-1) + 1)
-            self.atom_types = (np.argmax(self.atom_types, axis=-1) + 1)
-
+            if self.atom_types.shape[-1] == 7:
+                # Analog bits, from flowmm
+                atom_types = analog_bits_to_int(self.atom_types) + 1
+            else:
+                # this implies the distribution over atom_types is passed instead of the atom_types
+                atom_types =  np.argmax(self.atom_types, axis=-1) + 1
+            self.dict['atom_types'] = atom_types
+            self.atom_types = atom_types
+    
         self.get_structure()
         self.get_composition()
         self.get_validity()
@@ -381,6 +412,16 @@ class GenEval(object):
         wdist_spacegroup = wasserstein_distance(pred_spacegroup, gt_spacegroup)
         return {'wdist_spacegroup': wdist_spacegroup}
 
+    def get_spacegroup_js(self):
+        pred_spacegroup = [c.real_spacegroup for c in self.valid_samples]
+        gt_spacegroup = [c.spacegroup for c in self.gt_crys]
+        # Convert list of spacegroups into distribution over 230 possible spacegroups
+
+        gt_hist = np.histogram(gt_spacegroup, bins=range(1, 231))[0]/len(gt_spacegroup)
+        pred_hist = np.histogram(pred_spacegroup, bins=range(1, 231))[0]/len(pred_spacegroup)
+        return {"js_spacegroup": jensenshannon(gt_hist, pred_hist)}
+
+
     def get_spacegroup_match(self):
         spacegroup_match = np.array([c.spacegroup_match for c in self.valid_samples]).mean()
         return {'spacegroup_match': spacegroup_match}
@@ -405,6 +446,10 @@ class GenEval(object):
         metrics.update(self.get_num_elem_wdist())
         metrics.update(self.get_coverage())
         metrics.update(self.get_spacegroup_wdist())
+        try:
+            metrics.update(self.get_spacegroup_js())
+        except:
+            print("Spacegroup JS didn't work")
         metrics.update(self.get_spacegroup_match())
         return metrics
 
@@ -418,7 +463,7 @@ def get_file_paths(root_path, task, label='', suffix='pt'):
     return out_name
 
 
-def get_crystal_array_list(file_path, batch_idx=0):
+def get_crystal_array_list(file_path, batch_idx=0, get_true_list=True):
     data = load_data(file_path)
     if batch_idx == -1:
         batch_size = data['frac_coords'].shape[0]
@@ -451,7 +496,7 @@ def get_crystal_array_list(file_path, batch_idx=0):
             data['angles'][batch_idx],
             data['num_atoms'][batch_idx])
 
-    if 'input_data_batch' in data:
+    if get_true_list and 'input_data_batch' in data:
         batch = data['input_data_batch']
         if isinstance(batch, dict):
             true_crystal_array_list = get_crystals_list(
@@ -503,7 +548,7 @@ def main(args):
     if 'gen' in args.tasks:
 
         gen_file_path = get_file_paths(args.root_path, 'gen', args.label)
-        crys_array_list, _ = get_crystal_array_list(gen_file_path, batch_idx = -2)
+        crys_array_list, _ = get_crystal_array_list(gen_file_path, batch_idx = args.batch_idx, get_true_list=False)
         if args.gt_crys_file != '':
             if os.path.exists(args.gt_crys_file):
                 print("Loading gt_crys")
@@ -529,13 +574,19 @@ def main(args):
             gt_crys = p_map(lambda x: Crystal(x), true_crystal_array_list)
         if os.path.exists(args.root_path + f'/gen_crys_{args.label}.pt'):
             gen_crys = torch.load(args.root_path + f'/gen_crys_{args.label}.pt')
+        elif args.label == '' and os.path.exists(args.root_path + '/gen_crys.pt'):
+            gen_crys = torch.load(args.root_path + '/gen_crys.pt')
         else:
+            # Mapping gen_crys
             gen_crys = p_map(lambda x: Crystal(x), crys_array_list)
-            torch.save(gen_crys, args.root_path + f'/gen_crys_{args.label}.pt')
-
+            try:
+                torch.save(gen_crys, args.root_path + f'/gen_crys_{args.label}.pt')
+            except:
+                print("Gen_crys couldn't be saved")
+        gt_prop_eval_path = args.gt_prop_eval_path if args.gt_prop_eval_path is not None else cfg.data.datamodule.datasets.test[0].gt_prop_eval_path
         gen_evaluator = GenEval(
             gen_crys, gt_crys, eval_model_name=eval_model_name, n_samples=args.n_samples,
-            gt_prop_eval_path=cfg.data.datamodule.datasets.test[0].gt_prop_eval_path)
+            gt_prop_eval_path=gt_prop_eval_path)
         gen_metrics = gen_evaluator.get_metrics()
         all_metrics.update(gen_metrics)
 
@@ -610,5 +661,8 @@ if __name__ == '__main__':
     parser.add_argument('--n_samples', type=int, default=1000)
     parser.add_argument('--conventional', type=bool, default=False,
                         help='whether to use the conventional lattice instead of the primitive lattice')
+    parser.add_argument('--batch_idx', type=int, default=-2,
+                        help='default -2, should be -1 for flowmm')
+    parser.add_argument('--gt_prop_eval_path', default=None)
     args = parser.parse_args()
     main(args)
