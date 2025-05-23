@@ -539,6 +539,98 @@ def get_gt_crys_ori_conventional(cif):
     }
     return Crystal(crys_array_dict) 
 
+class CrystalWPTemplates():
+    '''
+    Class for checking Wyckoff Templates of crystals
+    '''
+    def __init__(self, gt_crys):
+        '''
+        Gets all unique wyckoff templates for ground truth crystals
+        '''
+        self.gt_crys_dict = []
+        for crys in tqdm(gt_crys):
+            crys_dict = {
+                'lengths': crys.lengths,
+                'angles': crys.angles,
+                'atom_types': crys.atom_types,
+                'frac_coords': crys.frac_coords,
+            }
+            self.gt_crys_dict.append(crys_dict)
+        wp_labels_gt = []
+        for crys in tqdm(self.gt_crys_dict):
+            if crys is None:
+                continue
+            try:
+                wp_labels = self.get_wp_label_counter(crys)
+            except:
+                continue
+            if wp_labels is None:
+                continue
+            wp_labels_gt.append(wp_labels)
+        wp_frozen_labels_gt = [self.hashable_wp_labels(*wp_labels) for wp_labels in wp_labels_gt]
+        self.wp_frozen_labels_gt_counter = Counter(wp_frozen_labels_gt)
+
+    def crys_dict_to_pymatgen(self, crys_dict):
+        lengths = crys_dict['lengths']
+        angles = crys_dict['angles']
+        lattice = Lattice.from_parameters(*lengths, *angles)
+        if len(crys_dict['atom_types'].shape) == 2:
+            species = crys_dict['atom_types'].argmax(-1) + 1
+        else:
+            species = crys_dict['atom_types']
+        coords = crys_dict['frac_coords']
+        try:
+            structure = Structure(lattice, species, coords)
+            return structure
+        except:
+            return None
+
+    def get_wp_label_counter(self, crys):
+        structure = self.crys_dict_to_pymatgen(crys)
+        if structure is None:
+            return None
+        if np.isnan(structure.lattice.angles).any() or np.isnan(structure.lattice.lengths).any():
+            return None
+        if np.isinf(structure.lattice.angles).any() or np.isinf(structure.lattice.lengths).any():
+            return None
+        try:
+            spga = SpacegroupAnalyzer(structure, symprec=0.1)
+        except:
+            return None
+        crystal = spga.get_refined_structure()
+
+        pyx = pyxtal()
+        try:
+            pyx.from_seed(crystal)
+            wp_labels = []
+            for atom_site in pyx.atom_sites:
+                wp_labels.append(atom_site.wp.get_label())
+            
+            return pyx.group.number, Counter(wp_labels)
+        except:
+            return None
+
+    def hashable_wp_labels(self, symm_group, wp_labels):
+        return (symm_group, frozenset(wp_labels.items()))
+
+    def count_labels_in_gt(self, crys_array_list):
+        '''
+        Returns the number of unique wyckoff templates in the list of crystals, the number 
+        of these templates that appear in the ground truth list, and the proportion in the ground truth.
+        '''
+        wp_labels = []
+        for crys in tqdm(crys_array_list):
+            wp_labels.append(self.get_wp_label_counter(crys))
+        wp_frozen_labels = [self.hashable_wp_labels(*wp_labels_list) for wp_labels_list in wp_labels  if wp_labels_list is not None]
+        wp_frozen_labels_counter = Counter(wp_frozen_labels)
+
+        label_in_gt = []
+        for wp_labels in tqdm(wp_frozen_labels_counter.keys()):
+            label_in_gt.append(wp_labels in self.wp_frozen_labels_gt_counter)
+        label_in_gt = np.array(label_in_gt)
+        return len(wp_frozen_labels_counter), label_in_gt.sum(), label_in_gt.mean()
+
+
 def main(args):
     all_metrics = {}
 
