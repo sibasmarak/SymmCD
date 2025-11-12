@@ -1,6 +1,8 @@
 # SymmCD: Symmetry-Preserving Crystal Generation with Diffusion Models
 
-This is the codebase for the the paper [SymmCD presented at ICLR 2025](https://arxiv.org/abs/2502.03638).
+This is the codebase for the the paper [SymmCD: Symmetry-Preserving Crystal Generation with Diffusion Models](https://arxiv.org/abs/2502.03638) presented at ICLR 2025.
+
+![alt text](figure_symmcd.pdf "Title")
 
 ## Setup
 
