@@ -1,5 +1,7 @@
 # SymmCD: Symmetry-Preserving Crystal Generation with Diffusion Models
 
+This is the codebase for the the paper [SymmCD presented at ICLR 2025](https://arxiv.org/abs/2502.03638).
+
 ## Setup
 
 #### Recommended installation method
@@ -72,6 +74,15 @@ python scripts/sample.py --model_path <model_path> --save_path <save_path> --for
 - `wandb sweep --project <project-name> -e <entity-name> hyperparam_sweep.yaml`.  
 - `wandb agent <above-agent-id>`.  
 
+## Citation
+If you find this codebase useful, please cite the following paper:
+```
+@inproceedings{levysymmcd,
+  title={SymmCD: Symmetry-Preserving Crystal Generation with Diffusion Models},
+  author={Levy, Daniel and Panigrahi, Siba Smarak and Kaba, S{\'e}kou-Oumar and Zhu, Qiang and Lee, Kin Long Kelvin and Galkin, Mikhail and Miret, Santiago and Ravanbakhsh, Siamak},
+  booktitle={The Thirteenth International Conference on Learning Representations}
+}
+```
 
 ## Acknowledgements
 This codebase was adapted from the [DiffCSP](https://github.com/jiaor17/DiffCSP) repository. We thank the authors for their work and open-sourcing their code.
