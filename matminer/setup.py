@@ -38,7 +38,7 @@ if __name__ == "__main__":
     setup(
         name="matminer",
         use_scm_version={
-            "root": ".",
+            "root": "..",
             "relative_to": __file__,
             "local_scheme": local_version,
         },
